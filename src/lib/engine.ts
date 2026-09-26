@@ -3,7 +3,7 @@ import { getRecommendationsForItem, getTmdbExternalIds, searchTmdb, discoverByFi
 import { getAiRecommendations, generateTasteProfile, TasteProfile } from './ai-recommender';
 import { addMovieToRadarr, getAllRadarrMovies } from './radarr';
 import { addSeriesToSonarr, getAllSonarrSeries } from './sonarr';
-import { addRecommendation, addLog, getFeedbackProfile, getRecommendations, updateRecommendationStatus } from './database';
+import { addRecommendation, addLog, getFeedbackProfile, getRecommendations, getWatchedMediaSignalSets, syncWatchedMediaState, updateRecommendationStatus } from './database';
 import { getConfig } from './config';
 import { notifyRunResult } from './notifications';
 import type { FeedbackProfile, Recommendation, WatchedItem } from './types';
@@ -25,6 +25,9 @@ interface LibrarySets {
     sonarrTvdbIds: Set<number>;
     sonarrTitles: Set<string>;
     watchedTitles: Set<string>;
+    watchedTmdbIds: Set<number>;
+    watchedTvdbIds: Set<number>;
+    watchedImdbIds: Set<string>;
 }
 
 async function inferPreferredLanguages(items: WatchedItem[]): Promise<string[]> {
@@ -159,6 +162,9 @@ export async function runRecommendationEngine(
             sonarrTvdbIds: new Set<number>(),
             sonarrTitles: new Set<string>(),
             watchedTitles: new Set<string>(),
+            watchedTmdbIds: new Set<number>(),
+            watchedTvdbIds: new Set<number>(),
+            watchedImdbIds: new Set<string>(),
         };
 
         try {
@@ -194,6 +200,14 @@ export async function runRecommendationEngine(
             // Add watched titles to the exclusion set
             for (const w of watchHistory) {
                 library.watchedTitles.add(w.title.toLowerCase());
+            }
+            syncWatchedMediaState(watchHistory);
+            const watchedSignals = getWatchedMediaSignalSets();
+            library.watchedTmdbIds = watchedSignals.tmdbIds;
+            library.watchedTvdbIds = watchedSignals.tvdbIds;
+            library.watchedImdbIds = watchedSignals.imdbIds;
+            for (const title of watchedSignals.titles) {
+                library.watchedTitles.add(title);
             }
             addLog({ level: 'INFO', message: `📺 Found ${watchHistory.length} watched items`, source: 'engine' });
         } catch (err) {
@@ -409,7 +423,7 @@ export async function runRecommendationEngine(
 
             if (rec.mediaType === 'movie') {
                 // Check by TMDb ID first, then by title
-                if (rec.tmdbId && library.radarrTmdbIds.has(rec.tmdbId)) {
+                if (rec.tmdbId && (library.radarrTmdbIds.has(rec.tmdbId) || library.watchedTmdbIds.has(rec.tmdbId))) {
                     alreadyExists = true;
                 } else if (library.radarrTitles.has(titleLower)) {
                     alreadyExists = true;
@@ -423,7 +437,7 @@ export async function runRecommendationEngine(
                     } catch { /* ignore */ }
                 }
                 // Check by TVDB ID first, then by title
-                if (rec.tvdbId && library.sonarrTvdbIds.has(rec.tvdbId)) {
+                if (rec.tvdbId && (library.sonarrTvdbIds.has(rec.tvdbId) || library.watchedTvdbIds.has(rec.tvdbId))) {
                     alreadyExists = true;
                 } else if (library.sonarrTitles.has(titleLower)) {
                     alreadyExists = true;
@@ -431,7 +445,7 @@ export async function runRecommendationEngine(
             }
 
             // Also skip if title matches something already watched
-            if (library.watchedTitles.has(titleLower)) {
+            if (library.watchedTitles.has(titleLower) || (rec.imdbId && library.watchedImdbIds.has(rec.imdbId.toLowerCase()))) {
                 alreadyExists = true;
             }
             if (feedbackProfile.rejectedTitles.includes(titleLower)) {

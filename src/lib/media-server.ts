@@ -149,7 +149,7 @@ class PlexConnector implements MediaServerConnector {
                 const media = res.data?.MediaContainer?.Metadata || [];
                 for (const item of media) {
                     items.push({
-                        title: item.title,
+                        title: section.type === 'show' ? item.grandparentTitle || item.title : item.title,
                         year: item.year,
                         mediaType: section.type === 'movie' ? 'movie' : 'series',
                         genres: item.Genre?.map((g: { tag: string }) => g.tag) || [],

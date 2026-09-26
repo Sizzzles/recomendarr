@@ -88,3 +88,28 @@ describe('Plex connection validation', () => {
         }));
     });
 });
+
+describe('Plex watched-history mapping', () => {
+    it('uses a series title when Plex returns recently viewed episode metadata', async () => {
+        mocks.get
+            .mockResolvedValueOnce({
+                data: { MediaContainer: { Directory: [{ key: '2', type: 'show', title: 'TV' }] } },
+            })
+            .mockResolvedValueOnce({
+                data: {
+                    MediaContainer: {
+                        Metadata: [{
+                            title: 'Pilot',
+                            grandparentTitle: 'Twin Peaks',
+                            year: 1990,
+                            lastViewedAt: 1_700_000_000,
+                        }],
+                    },
+                },
+            });
+
+        const items = await createMediaServerConnector(plexConfig()).getWatchHistory();
+
+        expect(items[0]).toMatchObject({ title: 'Twin Peaks', mediaType: 'series' });
+    });
+});

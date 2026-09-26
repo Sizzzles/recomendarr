@@ -17,6 +17,7 @@ function getTmdbClient() {
 
 interface TmdbResult {
     id: number;
+    media_type?: 'movie' | 'tv' | 'person';
     title?: string;
     name?: string;
     release_date?: string;
@@ -26,6 +27,32 @@ interface TmdbResult {
     genre_ids?: number[];
     original_language?: string;
     vote_average: number;
+}
+
+export async function searchTmdbTitles(query: string): Promise<Recommendation[]> {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return [];
+
+    try {
+        const res = await getTmdbClient().get('/search/multi', {
+            params: { query: trimmedQuery },
+        });
+        const results = (res.data.results || []) as TmdbResult[];
+        return results
+            .filter(result => result.media_type === 'movie' || result.media_type === 'tv')
+            .slice(0, 12)
+            .map(result => ({
+                ...tmdbResultToRecommendation(
+                    result,
+                    result.media_type === 'movie' ? 'movie' : 'series',
+                    'tmdb'
+                ),
+                status: 'watched' as const,
+            }));
+    } catch (err) {
+        addLog({ level: 'ERROR', message: `TMDb title search failed for "${trimmedQuery}": ${(err as Error).message}`, source: 'tmdb' });
+        return [];
+    }
 }
 
 interface TmdbCredits {

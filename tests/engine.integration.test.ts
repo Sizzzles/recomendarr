@@ -60,6 +60,13 @@ describe('Engine Integration Tests (Hybrid Mocking)', () => {
             // Mock database deduplication layers
             vi.spyOn(database, 'addRecommendation').mockImplementation((r) => r);
             vi.spyOn(database, 'updateRecommendationStatus').mockImplementation(() => true);
+            vi.spyOn(database, 'syncWatchedMediaState').mockImplementation(() => {});
+            vi.spyOn(database, 'getWatchedMediaSignalSets').mockReturnValue({
+                tmdbIds: new Set(),
+                tvdbIds: new Set(),
+                imdbIds: new Set(),
+                titles: new Set(),
+            });
             vi.spyOn(database, 'getFeedbackProfile').mockReturnValue({
                 rejectedTitles: [],
                 preferredGenres: [],
@@ -89,6 +96,7 @@ describe('Engine Integration Tests (Hybrid Mocking)', () => {
             expect(result).toHaveProperty('watchedCount');
             expect(result.watchedCount).toBe(2);
             expect(result.errors).toEqual([]);
+            expect(database.syncWatchedMediaState).toHaveBeenCalledWith(mockHistory);
         }, 15000);
         
         it('should execute engine run with different filters', async () => {
@@ -130,6 +138,13 @@ describe('Engine Integration Tests (Hybrid Mocking)', () => {
                 avoidedMediaTypes: [],
                 feedbackReasons: {},
                 summary: '',
+            });
+            vi.spyOn(database, 'syncWatchedMediaState').mockImplementation(() => {});
+            vi.spyOn(database, 'getWatchedMediaSignalSets').mockReturnValue({
+                tmdbIds: new Set(),
+                tvdbIds: new Set(),
+                imdbIds: new Set(),
+                titles: new Set(),
             });
             vi.spyOn(tmdb, 'getRecommendationsForItem').mockResolvedValue([]);
             vi.spyOn(tmdb, 'discoverByFilters').mockResolvedValue([]);

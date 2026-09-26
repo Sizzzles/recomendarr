@@ -18,6 +18,7 @@ interface RecommendationsWorkspaceProps {
     hasMore: boolean;
     onLoadMore: () => void;
     onAction: (id: string, action: string) => void;
+    onAddWatched: () => void;
     mode: 'queue' | 'library';
 }
 
@@ -33,6 +34,7 @@ export function RecommendationsWorkspace({
     hasMore,
     onLoadMore,
     onAction,
+    onAddWatched,
     mode,
 }: RecommendationsWorkspaceProps) {
     const [searchQuery, setSearchQuery] = useState('');
@@ -139,6 +141,11 @@ export function RecommendationsWorkspace({
                     <h2>{copy.title}</h2>
                     <p>{copy.description}</p>
                 </div>
+                {isQueueMode && filter === 'watched' && (
+                    <button type="button" className="btn btn-primary" onClick={onAddWatched}>
+                        Add watched title
+                    </button>
+                )}
             </div>
 
             <div className="filter-shell">
@@ -147,6 +154,8 @@ export function RecommendationsWorkspace({
                         {[
                             { key: 'all', label: `All active (${queueCount})` },
                             { key: 'pending', label: `Pending (${counts.pending})` },
+                            { key: 'not_now', label: `Not now (${counts.not_now})` },
+                            { key: 'watched', label: `Watched (${counts.watched})` },
                             { key: 'rejected', label: `Rejected (${counts.rejected})` },
                         ].map((tab) => (
                             <button
@@ -220,7 +229,7 @@ export function RecommendationsWorkspace({
                                         <div className="workspace-item-copy">
                                             <div className="workspace-item-top">
                                                 <h4>{rec.title}</h4>
-                                                <span className={`status-pill ${rec.status}`}>{rec.status}</span>
+                                                <span className={`status-pill ${rec.status}`}>{rec.status.replace('_', ' ')}</span>
                                             </div>
                                             <p className="workspace-item-subtitle">
                                                 {[rec.year, rec.voteAverage ? `${rec.voteAverage.toFixed(1)}/10` : null, rec.source.toUpperCase()]
@@ -249,6 +258,11 @@ export function RecommendationsWorkspace({
 
                                             {rec.status === 'rejected' && rec.feedbackReason && (
                                                 <p className="workspace-feedback-note">Rejected for {formatFeedbackReason(rec.feedbackReason)}</p>
+                                            )}
+                                            {rec.status === 'not_now' && rec.snoozedUntil && (
+                                                <p className="workspace-feedback-note">
+                                                    Snoozed until {new Date(rec.snoozedUntil).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                </p>
                                             )}
                                         </div>
                                     </button>

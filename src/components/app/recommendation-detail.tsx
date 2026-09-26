@@ -76,7 +76,7 @@ export function RecommendationDetail({
 
                     <div className="detail-copy">
                         <div className="detail-meta-row">
-                            <span className={`status-pill ${recommendation.status}`}>{recommendation.status}</span>
+                            <span className={`status-pill ${recommendation.status}`}>{recommendation.status.replace('_', ' ')}</span>
                             <span className={`source-pill ${recommendation.source}`}>{recommendation.source === 'ai' ? 'AI blend' : 'TMDb graph'}</span>
                             <span className={`type-pill-inline ${recommendation.mediaType}`}>{recommendation.mediaType}</span>
                         </div>
@@ -156,7 +156,7 @@ export function RecommendationDetail({
                         <dl className="detail-definition-list">
                             <div>
                                 <dt>Status</dt>
-                                <dd>{recommendation.status}</dd>
+                                <dd>{recommendation.status.replace('_', ' ')}</dd>
                             </div>
                             <div>
                                 <dt>Source</dt>
@@ -183,6 +183,12 @@ export function RecommendationDetail({
                             <button className="btn btn-success" onClick={() => onAction(recommendation.id!, 'approve')} disabled={loading}>
                                 Add to library
                             </button>
+                            <button className="btn btn-ghost" onClick={() => onAction(recommendation.id!, 'not_now')} disabled={loading}>
+                                Not now
+                            </button>
+                            <button className="btn btn-ghost" onClick={() => onAction(recommendation.id!, 'watched')} disabled={loading}>
+                                Already watched
+                            </button>
                             <button className="btn btn-danger" onClick={() => onAction(recommendation.id!, 'reject')} disabled={loading}>
                                 Reject with feedback
                             </button>
@@ -193,6 +199,26 @@ export function RecommendationDetail({
                             <span className="helper-copy">Rejected because: {formatFeedbackReason(recommendation.feedbackReason)}</span>
                             <button className="btn btn-ghost" onClick={() => onAction(recommendation.id!, 'pending')} disabled={loading}>
                                 Return to queue
+                            </button>
+                        </>
+                    )}
+                    {recommendation.status === 'not_now' && (
+                        <>
+                            <span className="helper-copy">
+                                {recommendation.snoozedUntil
+                                    ? `Snoozed until ${new Date(recommendation.snoozedUntil).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+                                    : 'Snoozed for later'}
+                            </span>
+                            <button className="btn btn-ghost" onClick={() => onAction(recommendation.id!, 'pending')} disabled={loading}>
+                                Bring back
+                            </button>
+                        </>
+                    )}
+                    {recommendation.status === 'watched' && (
+                        <>
+                            <span className="helper-copy">This title contributes to future recommendation signals.</span>
+                            <button className="btn btn-ghost" onClick={() => onAction(recommendation.id!, 'pending')} disabled={loading}>
+                                Return to Pending
                             </button>
                         </>
                     )}

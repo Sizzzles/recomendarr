@@ -732,6 +732,7 @@ textarea {
 
 .micro-pill.positive,
 .status-pill.added,
+.status-pill.watched,
 .health-badge.healthy {
   background: var(--green-soft);
   color: var(--text);
@@ -749,6 +750,7 @@ textarea {
 
 .micro-pill.neutral,
 .status-pill.pending,
+.status-pill.not_now,
 .source-pill.tmdb,
 .type-pill-inline.movie,
 .type-pill-inline.series,
@@ -1486,6 +1488,56 @@ textarea {
 .btn-sm {
   min-height: 38px;
   padding: 0 14px;
+}
+
+.watched-search-sheet {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.watched-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.watched-search-results {
+  display: grid;
+  gap: 10px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.watched-search-result {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.watched-search-result img,
+.watched-search-poster-placeholder {
+  width: 54px;
+  height: 78px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.watched-search-poster-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.watched-search-result p {
+  margin: 5px 0 0;
+  color: var(--text-soft);
 }
 
 .bottom-nav {

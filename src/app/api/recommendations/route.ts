@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getRecommendations, updateRecommendationStatus, getRecommendationCounts } from '@/lib/database';
+import { getRecommendations, updateRecommendationStatus, getRecommendationCounts, snoozeRecommendation } from '@/lib/database';
 import { approveAndAdd } from '@/lib/engine';
 import type { FeedbackReason, Recommendation } from '@/lib/types';
 
 function isRecommendationStatus(value: string): value is Recommendation['status'] {
-    return ['pending', 'approved', 'rejected', 'added'].includes(value);
+    return ['pending', 'approved', 'rejected', 'added', 'not_now', 'watched'].includes(value);
 }
 
 export async function GET(request: Request) {
@@ -60,6 +60,12 @@ export async function PATCH(request: Request) {
         } else if (action === 'pending') {
             updateRecommendationStatus(id, 'pending');
             return NextResponse.json({ success: true, message: 'Recommendation reset to pending' });
+        } else if (action === 'not_now') {
+            snoozeRecommendation(id, 7);
+            return NextResponse.json({ success: true, message: 'Recommendation snoozed for 7 days' });
+        } else if (action === 'watched') {
+            updateRecommendationStatus(id, 'watched');
+            return NextResponse.json({ success: true, message: 'Recommendation marked as watched' });
         }
 
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

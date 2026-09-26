@@ -1,7 +1,7 @@
 import type { FeedbackProfile, FeedbackReason } from '@/lib/types';
 
 export type Page = 'dashboard' | 'recommendations' | 'library' | 'logs' | 'settings';
-export type RecommendationFilter = 'all' | 'pending' | 'rejected';
+export type RecommendationFilter = 'all' | 'pending' | 'not_now' | 'watched' | 'rejected';
 export type SettingsTabId = 'media' | 'arr' | 'ai' | 'automation' | 'notifications' | 'advanced';
 
 export interface Counts {
@@ -9,6 +9,8 @@ export interface Counts {
     approved: number;
     rejected: number;
     added: number;
+    not_now: number;
+    watched: number;
     total: number;
 }
 
@@ -169,7 +171,6 @@ export const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; hint: stri
 ];
 
 export const FEEDBACK_OPTIONS: Array<{ value: FeedbackReason; label: string; hint: string }> = [
-    { value: 'already_watched', label: 'Already watched', hint: 'Don’t bring this title back again.' },
     { value: 'wrong_genre', label: 'Wrong genre', hint: 'Genre fit was off.' },
     { value: 'wrong_mood', label: 'Wrong mood', hint: 'Timing or vibe was wrong.' },
     { value: 'too_mainstream', label: 'Too mainstream', hint: 'Needs more hidden-gem energy.' },

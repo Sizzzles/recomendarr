@@ -7,6 +7,7 @@ import { FeedbackModal } from '@/components/app/feedback-modal';
 import { RecommendationsWorkspace } from '@/components/app/recommendations-workspace';
 import { SettingsPage } from '@/components/app/settings-page';
 import { SetupWizard } from '@/components/app/setup-wizard';
+import { WatchedSearchModal } from '@/components/app/watched-search-modal';
 import type {
     ConnectionResult,
     Counts,
@@ -18,7 +19,7 @@ import { EMPTY_DASHBOARD_SUMMARY } from '@/components/app/models';
 import type { LogEntry, Recommendation } from '@/lib/types';
 
 const RECOMMENDATION_PAGE_SIZE = 24;
-const EMPTY_COUNTS: Counts = { pending: 0, approved: 0, rejected: 0, added: 0, total: 0 };
+const EMPTY_COUNTS: Counts = { pending: 0, approved: 0, rejected: 0, added: 0, not_now: 0, watched: 0, total: 0 };
 
 function getRecommendationStatuses(page: Page, filter: RecommendationFilter) {
     if (page === 'library') {
@@ -31,6 +32,14 @@ function getRecommendationStatuses(page: Page, filter: RecommendationFilter) {
 
     if (filter === 'rejected') {
         return ['rejected'];
+    }
+
+    if (filter === 'not_now') {
+        return ['not_now'];
+    }
+
+    if (filter === 'watched') {
+        return ['watched'];
     }
 
     return ['pending', 'rejected'];
@@ -82,6 +91,7 @@ function HomeContent() {
     const [feedbackReason, setFeedbackReason] = useState<'already_watched' | 'wrong_genre' | 'wrong_mood' | 'too_mainstream' | 'too_old' | 'not_interested'>('not_interested');
     const [feedbackNotes, setFeedbackNotes] = useState('');
     const [savingFeedback, setSavingFeedback] = useState(false);
+    const [watchedSearchOpen, setWatchedSearchOpen] = useState(false);
 
     const [connResults, setConnResults] = useState<Record<string, ConnectionResult>>({});
     const [engineFilters, setEngineFilters] = useState<EngineFilterState>({
@@ -448,7 +458,14 @@ function HomeContent() {
                 return;
             }
 
-            toast(action === 'pending' ? 'Returned to queue' : 'Recommendation updated', 'info');
+            const message = action === 'pending'
+                ? 'Returned to queue'
+                : action === 'not_now'
+                    ? 'Snoozed for 7 days'
+                    : action === 'watched'
+                        ? 'Marked as watched'
+                        : 'Recommendation updated';
+            toast(message, 'info');
             await Promise.all([
                 fetchPendingPreview(),
                 fetchDashboardSummary(),
@@ -461,6 +478,17 @@ function HomeContent() {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleWatchedAdded = async (message: string) => {
+        toast(message, 'success');
+        await Promise.all([
+            fetchPendingPreview(),
+            fetchDashboardSummary(),
+            page === 'recommendations'
+                ? loadRecommendationCollection({ reset: true, offset: 0 })
+                : Promise.resolve(),
+        ]);
     };
 
     const clearLogs = async () => {
@@ -558,6 +586,7 @@ function HomeContent() {
                         hasMore={hasMoreRecs}
                         onLoadMore={loadMoreRecommendations}
                         onAction={handleAction}
+                        onAddWatched={() => setWatchedSearchOpen(true)}
                         mode="queue"
                     />
                 )}
@@ -576,6 +605,7 @@ function HomeContent() {
                         hasMore={hasMoreRecs}
                         onLoadMore={loadMoreRecommendations}
                         onAction={handleAction}
+                        onAddWatched={() => setWatchedSearchOpen(true)}
                         mode="library"
                     />
                 )}
@@ -644,6 +674,12 @@ function HomeContent() {
                 onNotesChange={setFeedbackNotes}
                 onClose={() => setFeedbackRec(null)}
                 onSubmit={submitFeedback}
+            />
+
+            <WatchedSearchModal
+                open={watchedSearchOpen}
+                onClose={() => setWatchedSearchOpen(false)}
+                onAdded={handleWatchedAdded}
             />
 
             <div className="toast-container">
