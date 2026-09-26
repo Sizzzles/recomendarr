@@ -135,6 +135,23 @@ export function saveSettings(settings: Record<string, string>): void {
   }
 }
 
+export function deleteSettings(keys: string[]): void {
+  if (keys.length === 0) return;
+  try {
+    const db = getSettingsDb();
+    const stmt = db.prepare('DELETE FROM settings WHERE key = ?');
+    const removeMany = db.transaction((values: string[]) => {
+      for (const key of values) stmt.run(key);
+    });
+    removeMany(keys);
+    db.close();
+    clearSettingsCache();
+  } catch (err) {
+    console.error('Failed to delete settings:', err);
+    throw err;
+  }
+}
+
 export function getAllSavedSettings(): Record<string, string> {
   return loadSettings();
 }

@@ -1,9 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { SetupDiscoveryStep } from './setup-discovery-step';
 import type { SettingsFormData } from './models';
 import { DEFAULT_SETTINGS_FORM } from './models';
+import { PlexSignIn } from './plex-sign-in';
+import type { ConnectedPlexServer } from './plex-sign-in-model';
 
 interface SetupWizardProps {
     step: number;
@@ -22,6 +24,7 @@ export function SetupWizard({
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<boolean | null>(null);
     const [saving, setSaving] = useState(false);
+    const [plexConnected, setPlexConnected] = useState(false);
     const [discovery, setDiscovery] = useState({
         mediaUsers: [] as Array<{ id: string; name: string }>,
         sonarrProfiles: [] as Array<{ id: number; name: string }>,
@@ -33,6 +36,15 @@ export function SetupWizard({
     const update = <K extends keyof SettingsFormData>(key: K, value: SettingsFormData[K]) => {
         setForm((prev) => ({ ...prev, [key]: value }));
     };
+
+    const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null) => {
+        setPlexConnected(Boolean(server));
+        setForm((previous) => ({
+            ...previous,
+            media_server_url: server?.url || '',
+            media_server_api_key: server ? previous.media_server_api_key : '',
+        }));
+    }, []);
 
     const handleDiscovery = (service: string, data: Record<string, unknown>) => {
         if (!data.success) return;
@@ -75,10 +87,14 @@ export function SetupWizard({
         setTestResult(null);
 
         try {
+            const testSettings = { ...form } as Record<string, string>;
+            if (service === 'mediaServer' && form.media_server_type === 'plex' && plexConnected) {
+                delete testSettings.media_server_api_key;
+            }
             const response = await fetch('/api/test-connection', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ service, settings: form }),
+                body: JSON.stringify({ service, settings: testSettings }),
             });
             const data = await response.json();
             if (!response.ok) {
@@ -173,7 +189,7 @@ export function SetupWizard({
                                 <button
                                     className="btn btn-primary"
                                     onClick={() => { setStep(1); setTestResult(null); }}
-                                    disabled={!form.media_server_url || !form.media_server_api_key || (form.media_server_type !== 'plex' && !form.media_server_user_id)}
+                                    disabled={!form.media_server_url || (!(form.media_server_type === 'plex' && plexConnected) && !form.media_server_api_key) || (form.media_server_type !== 'plex' && !form.media_server_user_id)}
                                 >
                                     Continue
                                 </button>
@@ -196,6 +212,12 @@ export function SetupWizard({
                             </div>
                         </div>
 
+                        {form.media_server_type === 'plex' && (
+                            <PlexSignIn onConnectionChange={handlePlexConnectionChange} toast={toast} />
+                        )}
+
+                        <details className={`plex-manual-fields ${form.media_server_type === 'plex' ? '' : 'standard'}`} open={form.media_server_type !== 'plex'}>
+                        <summary>{form.media_server_type === 'plex' ? 'Advanced manual setup' : 'Server connection'}</summary>
                         <div className="settings-grid two">
                             <label className="field-row">
                                 <span>Server URL</span>
@@ -215,6 +237,7 @@ export function SetupWizard({
                                 />
                             </label>
                         </div>
+                        </details>
 
                         {form.media_server_type !== 'plex' && (
                             <label className="field-row">

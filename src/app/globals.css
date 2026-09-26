@@ -1699,3 +1699,58 @@ textarea {
     min-width: 0;
   }
 }
+.plex-sign-in-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+}
+
+.plex-sign-in-card small,
+.plex-sign-in-card strong {
+  display: block;
+}
+
+.plex-sign-in-actions,
+.plex-server-list {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+
+.plex-server-list strong {
+  width: 100%;
+}
+
+.plex-auth-error {
+  color: var(--danger);
+  margin: .5rem 0 0;
+}
+
+.plex-manual-fields {
+  margin-top: .75rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--border);
+}
+
+.plex-manual-fields > summary {
+  margin: 0 0 .75rem;
+  color: var(--text-muted);
+  font-size: .82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.plex-manual-fields.standard {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.plex-manual-fields.standard > summary {
+  display: none;
+}

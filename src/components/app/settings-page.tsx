@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AutomationPanel } from './automation-panel';
 import { HealthBadge } from './health-badge';
 import { NotificationPanel } from './notification-panel';
 import type { ConnectionResult, DashboardSummary, SettingsFormData, SettingsTabId } from './models';
 import { DEFAULT_SETTINGS_FORM, SETTINGS_TABS } from './models';
 import { buildFeedbackImpactSummary, getFeedbackReasonBreakdown, getSchedulePreset } from './utils';
+import { PlexSignIn } from './plex-sign-in';
+import type { ConnectedPlexServer } from './plex-sign-in-model';
 
 interface SettingsPageProps {
     connResults: Record<string, ConnectionResult>;
@@ -36,6 +38,7 @@ export function SettingsPage({
     const [schedulePreset, setSchedulePreset] = useState(getSchedulePreset(DEFAULT_SETTINGS_FORM.cron_schedule));
     const [savedNextRun, setSavedNextRun] = useState<string | null>(dashboardSummary.automation.nextRun);
     const [schedulerPreview, setSchedulerPreview] = useState<{ nextRun: string | null; valid: boolean } | null>(null);
+    const [plexConnected, setPlexConnected] = useState(false);
     const [discovery, setDiscovery] = useState({
         mediaUsers: [] as Array<{ id: string; name: string }>,
         sonarrProfiles: [] as Array<{ id: number; name: string }>,
@@ -102,6 +105,15 @@ export function SettingsPage({
         }
     };
 
+    const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null) => {
+        setPlexConnected(Boolean(server));
+        setFormData((previous) => ({
+            ...previous,
+            media_server_url: server?.url || '',
+            media_server_api_key: server ? previous.media_server_api_key : '',
+        }));
+    }, []);
+
     const handleDiscovery = (service: string, data: ConnectionResult['data']) => {
         if (!data?.success) return;
 
@@ -142,7 +154,12 @@ export function SettingsPage({
     };
 
     const handleTest = async (service: string) => {
-        const data = await onTest(service, formData as unknown as Record<string, string>);
+        const testSettings = { ...formData } as unknown as Record<string, string>;
+        if (service === 'mediaServer' && formData.media_server_type === 'plex' &&
+            (plexConnected || formData.media_server_api_key.startsWith('••••'))) {
+            delete testSettings.media_server_api_key;
+        }
+        const data = await onTest(service, testSettings);
         if (data?.success) {
             toast('Connection successful', 'success');
             handleDiscovery(service, data);
@@ -278,6 +295,12 @@ export function SettingsPage({
                             </div>
                         </div>
 
+                        {formData.media_server_type === 'plex' && (
+                            <PlexSignIn onConnectionChange={handlePlexConnectionChange} toast={toast} />
+                        )}
+
+                        <details className={`plex-manual-fields ${formData.media_server_type === 'plex' ? '' : 'standard'}`} open={formData.media_server_type !== 'plex'}>
+                        <summary>{formData.media_server_type === 'plex' ? 'Advanced manual setup' : 'Server connection'}</summary>
                         <div className="settings-grid two">
                             <label className="field-row">
                                 <span>Server URL</span>
@@ -297,6 +320,7 @@ export function SettingsPage({
                                 />
                             </label>
                         </div>
+                        </details>
 
                         {formData.media_server_type !== 'plex' && (
                             <label className="field-row">

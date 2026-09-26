@@ -50,7 +50,7 @@ describe('Plex connector authentication', () => {
         }));
     });
 
-    it('uses apiKey ahead of plexToken in poster URLs', async () => {
+    it('uses a token-free server-side proxy for poster URLs', async () => {
         mocks.get
             .mockResolvedValueOnce({
                 data: { MediaContainer: { Directory: [{ key: '1', type: 'movie', title: 'Movies' }] } },
@@ -61,9 +61,8 @@ describe('Plex connector authentication', () => {
 
         const items = await createMediaServerConnector(plexConfig()).getWatchHistory();
 
-        expect(items[0].posterUrl).toBe(
-            'http://plex:32400/library/metadata/1/thumb?X-Plex-Token=settings-token'
-        );
+        expect(items[0].posterUrl).toBe('/api/plex-poster?path=%2Flibrary%2Fmetadata%2F1%2Fthumb');
+        expect(items[0].posterUrl).not.toContain('settings-token');
     });
 });
 

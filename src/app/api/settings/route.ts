@@ -11,13 +11,18 @@ export async function GET() {
         const setupComplete = isSetupComplete();
         const schedulerSnapshot = getSchedulerSnapshot();
 
+        const mediaApiKeyMask = config.mediaServer.apiKey ? '••••' + config.mediaServer.apiKey.slice(-4) : '';
+        const safeRaw = { ...savedSettings };
+        if (safeRaw.media_server_api_key) safeRaw.media_server_api_key = mediaApiKeyMask;
+        if (safeRaw.plex_token) safeRaw.plex_token = '••••' + safeRaw.plex_token.slice(-4);
+
         return NextResponse.json({
             setupComplete,
             config: {
                 mediaServer: {
                     type: config.mediaServer.type,
                     url: config.mediaServer.url,
-                    apiKey: config.mediaServer.apiKey ? '••••' + config.mediaServer.apiKey.slice(-4) : '',
+                    apiKey: mediaApiKeyMask,
                     hasApiKey: !!config.mediaServer.apiKey,
                 },
                 sonarr: {
@@ -55,7 +60,7 @@ export async function GET() {
                     notifyOnErrors: config.notifications.notifyOnErrors,
                 },
             },
-            raw: savedSettings,
+            raw: safeRaw,
         });
     } catch (err) {
         return NextResponse.json({ error: (err as Error).message }, { status: 500 });
@@ -77,6 +82,13 @@ export async function PUT(request: NextRequest) {
             if (value !== undefined && value !== null) {
                 normalized[key] = String(value);
             }
+        }
+
+        const storedMediaKey = getConfig().mediaServer.apiKey;
+        const storedMediaMask = storedMediaKey ? '••••' + storedMediaKey.slice(-4) : '';
+        if (normalized.media_server_api_key === storedMediaMask ||
+            (normalized.media_server_type === 'plex' && normalized.media_server_api_key === '' && Boolean(storedMediaKey))) {
+            delete normalized.media_server_api_key;
         }
 
         const schedulerEnabled = normalized.scheduler_enabled === 'true';

@@ -155,7 +155,7 @@ class PlexConnector implements MediaServerConnector {
                         genres: item.Genre?.map((g: { tag: string }) => g.tag) || [],
                         lastPlayedDate: item.lastViewedAt ? new Date(item.lastViewedAt * 1000).toISOString() : undefined,
                         overview: item.summary,
-                        posterUrl: item.thumb ? `${this.cfg.url}${item.thumb}?X-Plex-Token=${this.cfg.apiKey || this.cfg.plexToken}` : undefined,
+                        posterUrl: item.thumb ? `/api/plex-poster?path=${encodeURIComponent(item.thumb)}` : undefined,
                     });
                 }
             } catch (err) {
