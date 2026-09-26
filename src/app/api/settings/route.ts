@@ -86,7 +86,8 @@ export async function PUT(request: NextRequest) {
 
         const storedMediaKey = getConfig().mediaServer.apiKey;
         const storedMediaMask = storedMediaKey ? '••••' + storedMediaKey.slice(-4) : '';
-        if (normalized.media_server_api_key === storedMediaMask ||
+        if (normalized.media_server_api_key?.startsWith('••••') ||
+            normalized.media_server_api_key === storedMediaMask ||
             (normalized.media_server_type === 'plex' && normalized.media_server_api_key === '' && Boolean(storedMediaKey))) {
             delete normalized.media_server_api_key;
         }

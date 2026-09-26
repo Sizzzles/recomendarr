@@ -92,9 +92,13 @@ describe('Plex sign-in', () => {
         h.post.mockResolvedValue({ data: PIN });
         h.get
             .mockResolvedValueOnce({ data: { ...PIN, authToken: 'account-secret' } })
-            .mockResolvedValueOnce({ data: [] });
+            .mockResolvedValueOnce({ data: [{
+                name: 'Unavailable', clientIdentifier: 'server-1', provides: 'server',
+                accessToken: 'server-secret', connections: [{ uri: 'ftp://unsupported' }],
+            }] });
         const started = await h.service.startPlexSignIn();
 
+        await expect(h.service.pollPlexSignIn(started.flowId)).resolves.toEqual({ status: 'no_servers' });
         await expect(h.service.pollPlexSignIn(started.flowId)).resolves.toEqual({ status: 'no_servers' });
     });
 
@@ -168,5 +172,20 @@ describe('Plex sign-in', () => {
         await h.service.disconnectPlex();
 
         expect(h.settings).toEqual({ sonarr_api_key: 'keep-me', plex_client_identifier: 'keep-client-id' });
+    });
+
+    it('does not delete an active Jellyfin connection from a stale Plex page', async () => {
+        const h = harness({
+            media_server_type: 'jellyfin', media_server_url: 'https://jellyfin',
+            media_server_api_key: 'jellyfin-key', media_server_user_id: 'user',
+            plex_server_identifier: 'old-plex', unrelated: 'keep-me',
+        });
+
+        await h.service.disconnectPlex();
+
+        expect(h.settings).toMatchObject({
+            media_server_type: 'jellyfin', media_server_url: 'https://jellyfin',
+            media_server_api_key: 'jellyfin-key', media_server_user_id: 'user', unrelated: 'keep-me',
+        });
     });
 });

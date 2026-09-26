@@ -42,7 +42,7 @@ export function SetupWizard({
         setForm((previous) => ({
             ...previous,
             media_server_url: server?.url || '',
-            media_server_api_key: server ? previous.media_server_api_key : '',
+            media_server_api_key: '',
         }));
     }, []);
 

@@ -12,12 +12,13 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid Plex poster path' }, { status: 400 });
     }
     const config = getConfig().mediaServer;
-    if (config.type !== 'plex' || !config.url || !config.apiKey) {
+    const token = config.apiKey || config.plexToken;
+    if (config.type !== 'plex' || !config.url || !token) {
         return NextResponse.json({ error: 'Plex is not connected' }, { status: 404 });
     }
     try {
         const response = await axios.get(`${config.url.replace(/\/$/, '')}${path}`, {
-            headers: { 'X-Plex-Token': config.apiKey, Accept: 'image/*' },
+            headers: { 'X-Plex-Token': token, Accept: 'image/*' },
             responseType: 'arraybuffer',
             timeout: 10000,
         });

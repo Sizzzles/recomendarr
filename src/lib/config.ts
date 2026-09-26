@@ -4,6 +4,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { resolveSecretOverride } from './config-values';
 
 // Built-in TMDb API key (free tier, read-only)
 const BUILTIN_TMDB_KEY = '5bcf1f5af3514898e446e763914a826b';
@@ -229,7 +230,7 @@ export function getConfigWithOverrides(overrides: Record<string, string> = {}): 
       ...config.mediaServer,
       type: withFallback(overrides.media_server_type, config.mediaServer.type) as 'jellyfin' | 'plex' | 'emby',
       url: withFallback(overrides.media_server_url, config.mediaServer.url),
-      apiKey: withFallback(overrides.media_server_api_key, config.mediaServer.apiKey),
+      apiKey: resolveSecretOverride(overrides.media_server_api_key, config.mediaServer.apiKey),
       userId: withFallback(overrides.media_server_user_id, config.mediaServer.userId),
       plexToken: withFallback(overrides.plex_token, config.mediaServer.plexToken || config.mediaServer.apiKey),
     },

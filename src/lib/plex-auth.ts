@@ -138,7 +138,8 @@ export function createPlexAuthService(deps: PlexAuthDependencies) {
             { status: 'pending' } | { status: 'no_servers' } | { status: 'servers'; servers: PlexServerChoice[] }
         > {
             const flow = requireFlow(flowId);
-            if (flow.resources) {
+            if (flow.resources !== undefined) {
+                if (flow.resources.size === 0) return { status: 'no_servers' };
                 return { status: 'servers', servers: [...flow.resources.values()].map(publicServer) };
             }
             const clientId = getClientId();
@@ -156,7 +157,8 @@ export function createPlexAuthService(deps: PlexAuthDependencies) {
             const resources = Array.isArray(resourcesResponse.data) ? resourcesResponse.data as PlexResource[] : [];
             const usable = resources.filter((resource) =>
                 resource.provides?.split(',').includes('server') &&
-                resource.clientIdentifier && resource.accessToken && Array.isArray(resource.connections)
+                resource.clientIdentifier && resource.accessToken && Array.isArray(resource.connections) &&
+                orderedConnections(resource.connections).length > 0
             );
             flow.resources = new Map(usable.map((resource) => [resource.clientIdentifier!, resource]));
             if (flow.resources.size === 0) return { status: 'no_servers' };
@@ -197,10 +199,11 @@ export function createPlexAuthService(deps: PlexAuthDependencies) {
         },
 
         async disconnectPlex() {
-            deps.deleteSettings([
+            const activePlex = deps.getSettings().media_server_type === 'plex';
+            deps.deleteSettings(activePlex ? [
                 'media_server_type', 'media_server_url', 'media_server_api_key', 'plex_token',
                 'plex_server_identifier', 'plex_server_name', 'plex_account_name',
-            ]);
+            ] : ['plex_token', 'plex_server_identifier', 'plex_server_name', 'plex_account_name']);
             return { disconnected: true };
         },
     };

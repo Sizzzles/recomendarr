@@ -65,4 +65,13 @@ describe('settings API Plex token handling', () => {
         expect(response.status).toBe(200);
         expect(mocks.saveSettings).toHaveBeenCalledWith({ sonarr_url: 'http://new-sonarr' });
     });
+
+    it('does not overwrite a reconnected Plex token with its previous mask', async () => {
+        const response = await PUT(new Request('http://localhost/api/settings', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: { media_server_type: 'plex', media_server_api_key: '••••-old' } }),
+        }) as never);
+        expect(response.status).toBe(200);
+        expect(mocks.saveSettings).toHaveBeenCalledWith({ media_server_type: 'plex' });
+    });
 });
