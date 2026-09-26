@@ -29,6 +29,7 @@ export function getDatabase(): Database.Database {
     db.pragma('foreign_keys = ON');
 
     initializeDatabase(db);
+    runDatabaseMigrations(db);
     return db;
 }
 
@@ -104,6 +105,42 @@ function initializeDatabase(db: Database.Database) {
     if (!columns.includes('feedback_at')) {
         db.exec("ALTER TABLE recommendations ADD COLUMN feedback_at TEXT;");
     }
+}
+
+function runDatabaseMigrations(db: Database.Database) {
+    runMigration(db, 'migration_cleanup_demo_library_v1', () => {
+        db.prepare(
+            `DELETE FROM recommendations
+             WHERE status = 'added'
+             AND title IN (?, ?)`
+        ).run(
+            'The Day the Earth Stood Still',
+            'The Night Manager'
+        );
+    });
+}
+
+function runMigration(db: Database.Database, key: string, migration: () => void) {
+    const completed = db.prepare(
+        'SELECT value FROM settings WHERE key = ?'
+    ).get(key) as { value: string } | undefined;
+
+    if (completed?.value === 'true') {
+        return;
+    }
+
+    const transaction = db.transaction(() => {
+        migration();
+
+        db.prepare(
+            `INSERT INTO settings (key, value)
+             VALUES (?, ?)
+             ON CONFLICT(key)
+             DO UPDATE SET value = excluded.value`
+        ).run(key, 'true');
+    });
+
+    transaction();
 }
 
 // ---- Recommendation CRUD ----

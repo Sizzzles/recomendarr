@@ -13,6 +13,10 @@
 # testing
 /coverage
 
+# Recomendarr SQLite runtime sidecar files
+/data/*.db-shm
+/data/*.db-wal
+
 # next.js
 /.next/
 /out/
