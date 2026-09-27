@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['recommend.sizzles.media'],
+  allowedDevOrigins: ['*.*.media'],
   output: 'standalone',
   serverExternalPackages: ['better-sqlite3'],
   outputFileTracingExcludes: {
