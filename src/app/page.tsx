@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useDeferredValue, useEffect, useRef, useState } from 'react';
 import { AddToLibraryModal } from '@/components/app/add-to-library-modal';
 import { DashboardPage } from '@/components/app/dashboard-page';
 import { FeedbackModal } from '@/components/app/feedback-modal';
@@ -16,12 +16,16 @@ import type {
     RecommendationFilter,
 } from '@/components/app/models';
 import { EMPTY_DASHBOARD_SUMMARY } from '@/components/app/models';
+import { parseQueuePreferences, saveQueuePreferences } from '@/components/app/queue-model';
+import type { RecommendationSort } from '@/lib/recommendation-query';
 import type { LogEntry, Recommendation } from '@/lib/types';
+import type { RecommendationStatus } from '@/lib/types';
+import { beginOptimisticTransition, matchesQueueSearch, reconcileRecommendation } from '@/components/app/queue-optimistic';
 
 const RECOMMENDATION_PAGE_SIZE = 24;
 const EMPTY_COUNTS: Counts = { pending: 0, approved: 0, rejected: 0, added: 0, not_now: 0, watched: 0, total: 0 };
 
-function getRecommendationStatuses(page: Page, filter: RecommendationFilter) {
+function getRecommendationStatuses(page: Page, filter: RecommendationFilter): RecommendationStatus[] {
     if (page === 'library') {
         return ['added'];
     }
@@ -68,9 +72,17 @@ function HomeContent() {
     const [counts, setCounts] = useState<Counts>(EMPTY_COUNTS);
     const [logs, setLogs] = useState<LogEntry[]>([]);
     const [filter, setFilter] = useState<RecommendationFilter>('all');
+    const [queueSearch, setQueueSearch] = useState('');
+    const deferredQueueSearch = useDeferredValue(queueSearch);
+    const [queueSort, setQueueSort] = useState<RecommendationSort>('newest');
+    const [queuePreferencesReady, setQueuePreferencesReady] = useState(false);
+    const [matchingCount, setMatchingCount] = useState(0);
+    const recommendationRequest = useRef(0);
+    const mutationLock = useRef(new Set<string>());
+    const reloadCollectionRef = useRef<(options: { reset: boolean; offset: number }) => Promise<void>>(async () => {});
     const [logFilter, setLogFilter] = useState('all');
     const [isRunning, setIsRunning] = useState(false);
-    const [loading, setLoading] = useState(false);
+    const [loading] = useState(false);
     const [listLoading, setListLoading] = useState(false);
     const [loadingMoreRecs, setLoadingMoreRecs] = useState(false);
     const [hasMoreRecs, setHasMoreRecs] = useState(true);
@@ -79,6 +91,8 @@ function HomeContent() {
     const [dashboardSummary, setDashboardSummary] = useState(EMPTY_DASHBOARD_SUMMARY);
 
     const [modalRec, setModalRec] = useState<Recommendation | null>(null);
+    const [bulkModalRecs, setBulkModalRecs] = useState<Recommendation[]>([]);
+    const [bulkAddErrors, setBulkAddErrors] = useState<string[]>([]);
     const [arrProfiles, setArrProfiles] = useState<Array<{ id: number; name: string }>>([]);
     const [arrFolders, setArrFolders] = useState<Array<{ id: number; path: string; freeSpace: number }>>([]);
     const [modalLoading, setModalLoading] = useState(false);
@@ -92,6 +106,13 @@ function HomeContent() {
     const [feedbackNotes, setFeedbackNotes] = useState('');
     const [savingFeedback, setSavingFeedback] = useState(false);
     const [watchedSearchOpen, setWatchedSearchOpen] = useState(false);
+    const [mutatingIds, setMutatingIds] = useState<Set<string>>(new Set());
+    const [undoEntry, setUndoEntry] = useState<{
+        previous: Recommendation[];
+        expectedUpdatedAt: Record<string, string>;
+        message: string;
+    } | null>(null);
+    const [bulkFeedbackIds, setBulkFeedbackIds] = useState<string[]>([]);
 
     const [connResults, setConnResults] = useState<Record<string, ConnectionResult>>({});
     const [engineFilters, setEngineFilters] = useState<EngineFilterState>({
@@ -104,6 +125,9 @@ function HomeContent() {
         minRating: 0,
         providers: [],
     });
+    const currentQueueKey = `${page}|${filter}|${deferredQueueSearch.trim()}|${queueSort}`;
+    const currentQueueKeyRef = useRef(currentQueueKey);
+    currentQueueKeyRef.current = currentQueueKey;
 
     const toast = useCallback((msg: string, type = 'info') => {
         const id = Date.now();
@@ -142,14 +166,21 @@ function HomeContent() {
             setLoadingMoreRecs(true);
         }
 
+        const requestId = ++recommendationRequest.current;
         try {
             const params = new URLSearchParams({
                 status: getRecommendationStatuses(page, filter).join(','),
                 limit: String(RECOMMENDATION_PAGE_SIZE),
                 offset: String(offset),
             });
+            if (page === 'recommendations') {
+                if (deferredQueueSearch.trim()) params.set('search', deferredQueueSearch);
+                params.set('sort', queueSort);
+            }
             const response = await fetch(`/api/recommendations?${params}`);
             const data = await response.json();
+            if (requestId !== recommendationRequest.current) return;
+            if (!response.ok) throw new Error(data.error || 'Could not load recommendations');
             const nextRecs = Array.isArray(data.recommendations) ? data.recommendations as Recommendation[] : [];
 
             setRecs((prev) => {
@@ -161,18 +192,22 @@ function HomeContent() {
                 return [...prev, ...nextRecs.filter((rec) => !seen.has(rec.id))];
             });
             setCounts(data.counts || EMPTY_COUNTS);
+            setMatchingCount(typeof data.matchingCount === 'number' ? data.matchingCount : nextRecs.length);
             setRecOffset(offset + nextRecs.length);
             setHasMoreRecs(nextRecs.length === RECOMMENDATION_PAGE_SIZE);
         } catch {
+            if (requestId !== recommendationRequest.current) return;
             if (reset) {
                 setRecs([]);
                 setHasMoreRecs(false);
             }
         } finally {
+            if (requestId !== recommendationRequest.current) return;
             setListLoading(false);
             setLoadingMoreRecs(false);
         }
-    }, [filter, page]);
+    }, [deferredQueueSearch, filter, page, queueSort]);
+    reloadCollectionRef.current = loadRecommendationCollection;
 
     const loadMoreRecommendations = useCallback(() => {
         if (page !== 'recommendations' && page !== 'library') {
@@ -231,10 +266,33 @@ function HomeContent() {
     }, [checkEngine, fetchDashboardSummary, fetchPendingPreview, setupComplete]);
 
     useEffect(() => {
+        const preferences = parseQueuePreferences(window.localStorage);
+        setFilter(preferences.filter);
+        setQueueSort(preferences.sort);
+        setQueuePreferencesReady(true);
+    }, []);
+
+    useEffect(() => {
+        if (!undoEntry) return;
+        const timer = window.setTimeout(() => setUndoEntry(null), 8000);
+        return () => window.clearTimeout(timer);
+    }, [undoEntry]);
+
+    useEffect(() => {
+        if (!queuePreferencesReady) return;
+        saveQueuePreferences(window.localStorage, { filter, sort: queueSort });
+    }, [filter, queuePreferencesReady, queueSort]);
+
+    useEffect(() => {
+        if (page !== 'recommendations') setQueueSearch('');
+    }, [page]);
+
+    useEffect(() => {
         if (!setupComplete) return;
         if (page !== 'recommendations' && page !== 'library') return;
+        if (page === 'recommendations' && !queuePreferencesReady) return;
         void loadRecommendationCollection({ reset: true, offset: 0 });
-    }, [filter, loadRecommendationCollection, page, setupComplete]);
+    }, [filter, loadRecommendationCollection, page, queuePreferencesReady, setupComplete]);
 
     useEffect(() => {
         if (page === 'logs' && setupComplete) {
@@ -325,6 +383,8 @@ function HomeContent() {
     };
 
     const openAddModal = async (recommendation: Recommendation) => {
+        setBulkModalRecs([]);
+        setBulkAddErrors([]);
         setModalRec(recommendation);
         setModalLoading(true);
         setArrProfiles([]);
@@ -347,16 +407,25 @@ function HomeContent() {
         }
     };
 
+    const openBulkAddModal = async (recommendations: Recommendation[]) => {
+        if (!recommendations.length) return;
+        await openAddModal(recommendations[0]);
+        setBulkModalRecs(recommendations);
+    };
+
     const confirmAdd = async () => {
         if (!modalRec) return;
         setAddingToLibrary(true);
 
         try {
+            const isBulk = bulkModalRecs.length > 0;
             const response = await fetch('/api/recommendations', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    id: modalRec.id,
+                    ...(isBulk
+                        ? { ids: bulkModalRecs.map(item => item.id), mediaType: modalRec.mediaType }
+                        : { id: modalRec.id }),
                     action: 'approve',
                     qualityProfileId: selectedProfile || undefined,
                     rootFolderPath: selectedFolder || undefined,
@@ -364,13 +433,23 @@ function HomeContent() {
                 }),
             });
             const data = await response.json();
-            if (!data.success) {
+            if (!response.ok || !data.success) {
                 toast(data.message || data.error, 'error');
                 return;
             }
 
-            toast(data.message, 'success');
-            setModalRec(null);
+            toast(isBulk ? `${data.totals.added} added, ${data.totals.failed} failed` : data.message, data.totals?.failed ? 'info' : 'success');
+            if (isBulk && data.totals.failed > 0) {
+                const failedIds = new Set((data.results as Array<{ id: string; outcome: string }>).filter(item => item.outcome === 'failed').map(item => item.id));
+                const failed = bulkModalRecs.filter(item => item.id && failedIds.has(item.id));
+                setBulkModalRecs(failed);
+                setModalRec(failed[0] || null);
+                setBulkAddErrors((data.results as Array<{ id: string; outcome: string; message: string }>).filter(item => item.outcome === 'failed').map(item => item.message));
+            } else {
+                setModalRec(null);
+                setBulkModalRecs([]);
+                setBulkAddErrors([]);
+            }
             await Promise.all([
                 fetchPendingPreview(),
                 fetchDashboardSummary(),
@@ -385,39 +464,174 @@ function HomeContent() {
         }
     };
 
+    const performStatusAction = async (
+        id: string,
+        action: 'reject' | 'pending' | 'not_now' | 'watched',
+        feedback?: { feedbackReason?: string; feedbackNotes?: string },
+    ) => {
+        const previous = recs.find(rec => rec.id === id);
+        if (!previous || mutationLock.current.size > 0) return false;
+        mutationLock.current.add(id);
+        setUndoEntry(null);
+        const queryKey = currentQueueKeyRef.current;
+        const snapshot = { recommendations: recs, counts, matchingCount, offset: recOffset };
+        const status: RecommendationStatus = action === 'reject' ? 'rejected' : action === 'not_now' ? 'not_now' : action;
+        const visibleStatuses = getRecommendationStatuses(page, filter);
+        const optimistic = beginOptimisticTransition(recs, counts, id, status, visibleStatuses);
+        setRecs(optimistic.recommendations);
+        setCounts(optimistic.counts);
+        if (!visibleStatuses.includes(status)) {
+            setMatchingCount(value => Math.max(0, value - 1));
+            setRecOffset(value => Math.max(0, value - 1));
+        }
+        setMutatingIds(current => new Set(current).add(id));
+        try {
+            const response = await fetch('/api/recommendations', {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, action, ...feedback }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success || !data.recommendation) throw new Error(data.error || data.message || 'Recommendation update failed');
+            const authoritative = data.recommendation as Recommendation;
+            setUndoEntry({
+                previous: [previous],
+                expectedUpdatedAt: { [id]: authoritative.updatedAt || '' },
+                message: action === 'pending' ? 'Returned to queue' : action === 'not_now' ? 'Snoozed for 7 days' : action === 'watched' ? 'Marked as watched' : 'Recommendation rejected',
+            });
+            if (queryKey !== currentQueueKeyRef.current) {
+                await reloadCollectionRef.current({ reset: true, offset: 0 });
+                return true;
+            }
+            setRecs(current => reconcileRecommendation(current, authoritative, visibleStatuses, item => matchesQueueSearch(item, deferredQueueSearch)));
+            return true;
+        } catch (error) {
+            if (queryKey === currentQueueKeyRef.current) {
+                setRecs(snapshot.recommendations);
+                setCounts(snapshot.counts);
+                setMatchingCount(snapshot.matchingCount);
+                setRecOffset(snapshot.offset);
+            } else {
+                await reloadCollectionRef.current({ reset: true, offset: 0 });
+            }
+            toast((error as Error).message, 'error');
+            return false;
+        } finally {
+            mutationLock.current.delete(id);
+            setMutatingIds(current => { const next = new Set(current); next.delete(id); return next; });
+        }
+    };
+
+    const undoLastAction = async () => {
+        const entry = undoEntry;
+        if (!entry?.previous.length || mutationLock.current.size > 0) return;
+        const undoIds = entry.previous.flatMap(item => item.id ? [item.id] : []);
+        for (const id of undoIds) mutationLock.current.add(id);
+        setMutatingIds(current => new Set([...current, ...undoIds]));
+        setUndoEntry(null);
+        try {
+            const response = await fetch('/api/recommendations', {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(entry.previous.length === 1
+                    ? { id: entry.previous[0].id, action: 'restore', previous: entry.previous[0], expectedUpdatedAt: entry.expectedUpdatedAt[entry.previous[0].id!] }
+                    : { action: 'restore', restores: entry.previous.map(previous => ({ previous, id: previous.id, expectedUpdatedAt: entry.expectedUpdatedAt[previous.id!] })) }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw Object.assign(new Error(data.error || 'Undo failed'), { status: response.status });
+            await reloadCollectionRef.current({ reset: true, offset: 0 });
+            toast('Action undone', 'success');
+        } catch (error) {
+            await reloadCollectionRef.current({ reset: true, offset: 0 });
+            toast((error as { status?: number }).status === 409 ? 'Could not undo because this recommendation changed. Newer state was preserved.' : (error as Error).message, 'error');
+        } finally {
+            for (const id of undoIds) mutationLock.current.delete(id);
+            setMutatingIds(current => { const next = new Set(current); for (const id of undoIds) next.delete(id); return next; });
+        }
+    };
+
+    const performBulkStatusAction = async (ids: string[], action: 'not_now' | 'watched' | 'pending' | 'reject', feedback?: { feedbackReason?: string; feedbackNotes?: string }) => {
+        const uniqueIds = Array.from(new Set(ids));
+        const previous = uniqueIds.flatMap(id => recs.find(rec => rec.id === id) || []);
+        if (previous.length !== uniqueIds.length || mutationLock.current.size > 0) return false;
+        for (const id of uniqueIds) mutationLock.current.add(id);
+        setUndoEntry(null);
+        const queryKey = currentQueueKeyRef.current;
+        const snapshot = { recommendations: recs, counts, matchingCount, offset: recOffset };
+        const destination: RecommendationStatus = action === 'reject' ? 'rejected' : action === 'not_now' ? 'not_now' : action;
+        const visibleStatuses = getRecommendationStatuses(page, filter);
+        let nextRecommendations = recs;
+        let nextCounts = counts;
+        for (const item of previous) {
+            const transition = beginOptimisticTransition(nextRecommendations, nextCounts, item.id!, destination, visibleStatuses);
+            nextRecommendations = transition.recommendations;
+            nextCounts = transition.counts;
+        }
+        setRecs(nextRecommendations);
+        setCounts(nextCounts);
+        const leavingCount = visibleStatuses.includes(destination) ? 0 : previous.length;
+        if (leavingCount) {
+            setMatchingCount(value => Math.max(0, value - leavingCount));
+            setRecOffset(value => Math.max(0, value - leavingCount));
+        }
+        setMutatingIds(current => new Set([...current, ...uniqueIds]));
+        try {
+            const response = await fetch('/api/recommendations', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: uniqueIds, action, ...feedback }) });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Bulk action failed');
+            const authoritative = data.recommendations as Recommendation[];
+            setUndoEntry({
+                previous,
+                expectedUpdatedAt: Object.fromEntries(authoritative.map(item => [item.id!, item.updatedAt || ''])),
+                message: `${authoritative.length} recommendations updated`,
+            });
+            if (queryKey !== currentQueueKeyRef.current) {
+                await reloadCollectionRef.current({ reset: true, offset: 0 });
+                return true;
+            }
+            setRecs(current => authoritative.reduce((items, updated) => reconcileRecommendation(items, updated, visibleStatuses, item => matchesQueueSearch(item, deferredQueueSearch)), current));
+            return true;
+        } catch (error) {
+            if (queryKey === currentQueueKeyRef.current) {
+                setRecs(snapshot.recommendations);
+                setCounts(snapshot.counts);
+                setMatchingCount(snapshot.matchingCount);
+                setRecOffset(snapshot.offset);
+            } else {
+                await reloadCollectionRef.current({ reset: true, offset: 0 });
+            }
+            toast((error as Error).message, 'error');
+            return false;
+        } finally {
+            for (const id of uniqueIds) mutationLock.current.delete(id);
+            setMutatingIds(current => { const next = new Set(current); for (const id of uniqueIds) next.delete(id); return next; });
+        }
+    };
+
+    const handleBulkAction = async (ids: string[], action: 'not_now' | 'watched' | 'pending' | 'reject') => {
+        if (action === 'reject') {
+            setBulkFeedbackIds(ids);
+            setFeedbackReason('not_interested');
+            setFeedbackNotes('');
+            const first = recs.find(rec => rec.id === ids[0]);
+            if (first) setFeedbackRec(first);
+            return;
+        }
+        await performBulkStatusAction(ids, action);
+    };
+
     const submitFeedback = async () => {
         if (!feedbackRec) return;
         setSavingFeedback(true);
 
         try {
-            const response = await fetch('/api/recommendations', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    id: feedbackRec.id,
-                    action: 'reject',
-                    feedbackReason,
-                    feedbackNotes: feedbackNotes.trim() || undefined,
-                }),
-            });
-            const data = await response.json();
-
-            if (!data.success) {
-                toast(data.message || data.error, 'error');
-                return;
-            }
-
-            toast('Feedback saved and recommendation rejected', 'info');
+            const feedback = { feedbackReason, feedbackNotes: feedbackNotes.trim() || undefined };
+            const success = bulkFeedbackIds.length
+                ? await performBulkStatusAction(bulkFeedbackIds, 'reject', feedback)
+                : await performStatusAction(feedbackRec.id!, 'reject', feedback);
+            if (!success) return;
             setFeedbackRec(null);
+            setBulkFeedbackIds([]);
             setFeedbackReason('not_interested');
             setFeedbackNotes('');
-            await Promise.all([
-                fetchPendingPreview(),
-                fetchDashboardSummary(),
-                page === 'recommendations' || page === 'library'
-                    ? loadRecommendationCollection({ reset: true, offset: 0 })
-                    : Promise.resolve(),
-            ]);
         } catch (error) {
             toast((error as Error).message, 'error');
         } finally {
@@ -437,6 +651,7 @@ function HomeContent() {
         if (action === 'reject') {
             const recommendation = recs.find((rec) => rec.id === id);
             if (recommendation) {
+                setBulkFeedbackIds([]);
                 setFeedbackRec(recommendation);
                 setFeedbackReason(recommendation.feedbackReason || 'not_interested');
                 setFeedbackNotes(recommendation.feedbackNotes || '');
@@ -444,40 +659,7 @@ function HomeContent() {
             return;
         }
 
-        setLoading(true);
-        try {
-            const response = await fetch('/api/recommendations', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id, action }),
-            });
-            const data = await response.json();
-
-            if (!data.success) {
-                toast(data.message || data.error, 'error');
-                return;
-            }
-
-            const message = action === 'pending'
-                ? 'Returned to queue'
-                : action === 'not_now'
-                    ? 'Snoozed for 7 days'
-                    : action === 'watched'
-                        ? 'Marked as watched'
-                        : 'Recommendation updated';
-            toast(message, 'info');
-            await Promise.all([
-                fetchPendingPreview(),
-                fetchDashboardSummary(),
-                page === 'recommendations' || page === 'library'
-                    ? loadRecommendationCollection({ reset: true, offset: 0 })
-                    : Promise.resolve(),
-            ]);
-        } catch (error) {
-            toast((error as Error).message, 'error');
-        } finally {
-            setLoading(false);
-        }
+        await performStatusAction(id, action as 'pending' | 'not_now' | 'watched');
     };
 
     const handleWatchedAdded = async (message: string) => {
@@ -574,7 +756,6 @@ function HomeContent() {
 
                 {page === 'recommendations' && (
                     <RecommendationsWorkspace
-                        key={`queue-${filter}`}
                         recs={recs}
                         counts={counts}
                         filter={filter}
@@ -588,6 +769,15 @@ function HomeContent() {
                         onAction={handleAction}
                         onAddWatched={() => setWatchedSearchOpen(true)}
                         mode="queue"
+                        search={queueSearch}
+                        sort={queueSort}
+                        matchingCount={matchingCount}
+                        onSearchChange={setQueueSearch}
+                        onSortChange={setQueueSort}
+                        onBulkAction={handleBulkAction}
+                        onBulkAdd={(recommendations) => void openBulkAddModal(recommendations)}
+                        mutatingIds={mutatingIds}
+                        mutationBusy={mutatingIds.size > 0}
                     />
                 )}
 
@@ -651,6 +841,8 @@ function HomeContent() {
 
             <AddToLibraryModal
                 recommendation={modalRec}
+                count={bulkModalRecs.length || 1}
+                resultDetails={bulkAddErrors}
                 profiles={arrProfiles}
                 folders={arrFolders}
                 selectedProfile={selectedProfile}
@@ -661,7 +853,7 @@ function HomeContent() {
                 onProfileChange={setSelectedProfile}
                 onFolderChange={setSelectedFolder}
                 onSearchChange={setSearchForContent}
-                onClose={() => setModalRec(null)}
+                onClose={() => { setModalRec(null); setBulkModalRecs([]); setBulkAddErrors([]); }}
                 onSubmit={confirmAdd}
             />
 
@@ -672,7 +864,7 @@ function HomeContent() {
                 saving={savingFeedback}
                 onReasonChange={setFeedbackReason}
                 onNotesChange={setFeedbackNotes}
-                onClose={() => setFeedbackRec(null)}
+                onClose={() => { setFeedbackRec(null); setBulkFeedbackIds([]); }}
                 onSubmit={submitFeedback}
             />
 
@@ -683,6 +875,12 @@ function HomeContent() {
             />
 
             <div className="toast-container">
+                {undoEntry && (
+                    <div className="toast info toast-action">
+                        <span>{undoEntry.message}</span>
+                        <button type="button" onClick={undoLastAction} disabled={mutatingIds.size > 0}>Undo</button>
+                    </div>
+                )}
                 {toasts.map((item) => (
                     <div key={item.id} className={`toast ${item.type}`}>
                         {item.msg}

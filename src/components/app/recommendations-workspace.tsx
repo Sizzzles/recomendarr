@@ -3,6 +3,8 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { FeedbackProfile, Recommendation } from '@/lib/types';
 import type { Counts, RecommendationFilter } from './models';
+import type { RecommendationSort } from '../../lib/recommendation-query';
+import { getBulkAddEligibility, getQueueEmptyState, pruneSelection, selectAllVisible } from './queue-model';
 import { RecommendationDetail } from './recommendation-detail';
 import { formatFeedbackReason, getLearningHighlights, getRecommendationSignals } from './utils';
 
@@ -20,6 +22,15 @@ interface RecommendationsWorkspaceProps {
     onAction: (id: string, action: string) => void;
     onAddWatched: () => void;
     mode: 'queue' | 'library';
+    search?: string;
+    sort?: RecommendationSort;
+    matchingCount?: number;
+    onSearchChange?: (value: string) => void;
+    onSortChange?: (value: RecommendationSort) => void;
+    onBulkAction?: (ids: string[], action: 'not_now' | 'watched' | 'pending' | 'reject') => void;
+    onBulkAdd?: (recommendations: Recommendation[]) => void;
+    mutatingIds?: Set<string>;
+    mutationBusy?: boolean;
 }
 
 export function RecommendationsWorkspace({
@@ -36,17 +47,28 @@ export function RecommendationsWorkspace({
     onAction,
     onAddWatched,
     mode,
+    search,
+    sort,
+    matchingCount = recs.length,
+    onSearchChange,
+    onSortChange,
+    onBulkAction,
+    onBulkAdd,
+    mutatingIds = new Set(),
+    mutationBusy = false,
 }: RecommendationsWorkspaceProps) {
-    const [searchQuery, setSearchQuery] = useState('');
-    const [sortBy, setSortBy] = useState<'newest' | 'rating'>('newest');
+    const [librarySearch, setLibrarySearch] = useState('');
+    const [librarySort, setLibrarySort] = useState<'newest' | 'rating'>('newest');
     const [selectedId, setSelectedId] = useState<string | null>(null);
-    const deferredQuery = useDeferredValue(searchQuery);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const deferredQuery = useDeferredValue(librarySearch);
     const scrollRef = useRef<HTMLDivElement | null>(null);
     const sentinelRef = useRef<HTMLDivElement | null>(null);
     const queueCount = counts.pending + counts.rejected;
     const isQueueMode = mode === 'queue';
 
     const filteredRecs = useMemo(() => {
+        if (isQueueMode) return recs;
         return recs
             .filter((rec) => {
                 if (!deferredQuery) return true;
@@ -60,10 +82,10 @@ export function RecommendationsWorkspace({
                 );
             })
             .sort((a, b) => {
-                if (sortBy === 'rating') return (b.voteAverage || 0) - (a.voteAverage || 0);
+                if (librarySort === 'rating') return (b.voteAverage || 0) - (a.voteAverage || 0);
                 return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
             });
-    }, [deferredQuery, recs, sortBy]);
+    }, [deferredQuery, isQueueMode, librarySort, recs]);
 
     useEffect(() => {
         if (!hasMore || loadingMore || listLoading) {
@@ -98,6 +120,20 @@ export function RecommendationsWorkspace({
         : (filteredRecs[0]?.id || null);
 
     const selectedRecommendation = filteredRecs.find((rec) => rec.id === resolvedSelectedId) || null;
+    const selectedRecommendations = filteredRecs.filter(rec => rec.id && selectedIds.has(rec.id));
+    const addEligibility = getBulkAddEligibility(selectedRecommendations);
+
+    useEffect(() => {
+        setSelectedIds(current => pruneSelection(current, filteredRecs));
+    }, [filteredRecs]);
+    const emptyState = isQueueMode ? getQueueEmptyState({
+        loading: listLoading,
+        search: search || '',
+        filter,
+        matchingCount,
+        counts,
+        hasMore,
+    }) : null;
 
     const copy = isQueueMode
         ? {
@@ -148,6 +184,22 @@ export function RecommendationsWorkspace({
                 )}
             </div>
 
+            {isQueueMode && selectedIds.size > 0 && (
+                <div className="bulk-toolbar" aria-label="Bulk recommendation actions">
+                    <strong>{selectedIds.size} selected</strong>
+                    <button type="button" className="btn btn-ghost" disabled={mutationBusy} onClick={() => setSelectedIds(selectAllVisible(filteredRecs))}>Select all visible</button>
+                    <button type="button" className="btn btn-ghost" disabled={mutationBusy} onClick={() => setSelectedIds(new Set())}>Clear</button>
+                    <button type="button" className="btn btn-success" disabled={mutationBusy || !addEligibility.allowed} onClick={() => onBulkAdd?.(selectedRecommendations)}>Add</button>
+                    <button type="button" className="btn btn-ghost" disabled={mutationBusy} onClick={() => onBulkAction?.(Array.from(selectedIds), 'not_now')}>Not now</button>
+                    <button type="button" className="btn btn-ghost" disabled={mutationBusy} onClick={() => onBulkAction?.(Array.from(selectedIds), 'watched')}>Already watched</button>
+                    <button type="button" className="btn btn-danger" disabled={mutationBusy} onClick={() => onBulkAction?.(Array.from(selectedIds), 'reject')}>Reject</button>
+                    {selectedRecommendations.every(rec => ['not_now', 'rejected', 'watched'].includes(rec.status)) && (
+                        <button type="button" className="btn btn-ghost" disabled={mutationBusy} onClick={() => onBulkAction?.(Array.from(selectedIds), 'pending')}>Return to queue</button>
+                    )}
+                    {!addEligibility.allowed && <span className="bulk-explanation">{addEligibility.reason}</span>}
+                </div>
+            )}
+
             <div className="filter-shell">
                 {isQueueMode && (
                     <div className="filter-tabs wide">
@@ -174,12 +226,20 @@ export function RecommendationsWorkspace({
                         type="text"
                         className="workspace-search"
                         placeholder={copy.searchPlaceholder}
-                        value={searchQuery}
-                        onChange={(event) => setSearchQuery(event.target.value)}
+                        value={isQueueMode ? (search || '') : librarySearch}
+                        onChange={(event) => isQueueMode ? onSearchChange?.(event.target.value) : setLibrarySearch(event.target.value)}
                     />
-                    <select value={sortBy} onChange={(event) => setSortBy(event.target.value as 'newest' | 'rating')}>
+                    <select
+                        value={isQueueMode ? (sort || 'newest') : librarySort}
+                        onChange={(event) => isQueueMode
+                            ? onSortChange?.(event.target.value as RecommendationSort)
+                            : setLibrarySort(event.target.value as 'newest' | 'rating')}
+                    >
                         <option value="newest">Newest first</option>
+                        {isQueueMode && <option value="oldest">Oldest first</option>}
                         <option value="rating">Highest rated</option>
+                        {isQueueMode && <option value="title">Title A–Z</option>}
+                        {isQueueMode && <option value="source">Source</option>}
                     </select>
                 </div>
             </div>
@@ -193,8 +253,14 @@ export function RecommendationsWorkspace({
             ) : filteredRecs.length === 0 ? (
                 <div className="empty-state refined">
                     <div className="empty-icon">{copy.emptyIcon}</div>
-                    <h3>{copy.emptyTitle}</h3>
-                    <p>{copy.emptyDescription}</p>
+                    <h3>{emptyState?.title || copy.emptyTitle}</h3>
+                    <p>{emptyState?.description || copy.emptyDescription}</p>
+                    {emptyState?.action === 'clear-search' && (
+                        <button type="button" className="btn btn-secondary" onClick={() => onSearchChange?.('')}>Clear search</button>
+                    )}
+                    {isQueueMode && matchingCount > 0 && hasMore && (
+                        <button type="button" className="btn btn-secondary" onClick={onLoadMore}>Load remaining results</button>
+                    )}
                 </div>
             ) : (
                 <div className="workspace-shell">
@@ -202,7 +268,7 @@ export function RecommendationsWorkspace({
                         <div className="workspace-list-header">
                             <div>
                                 <p className="section-kicker">{isQueueMode ? 'Queue' : 'Library'}</p>
-                                <h3>{copy.listTitle}</h3>
+                                <h3>{isQueueMode ? `${matchingCount} titles match this view` : copy.listTitle}</h3>
                             </div>
                         </div>
 
@@ -212,12 +278,29 @@ export function RecommendationsWorkspace({
                                 const learningHighlights = getLearningHighlights(rec, feedbackProfile);
 
                                 return (
-                                    <button
+                                    <div
                                         key={rec.id}
-                                        type="button"
                                         className={`workspace-item ${resolvedSelectedId === rec.id ? 'active' : ''}`}
                                         onClick={() => setSelectedId(rec.id || null)}
+                                        onKeyDown={(event) => { if (event.key === 'Enter') setSelectedId(rec.id || null); }}
+                                        role="button"
+                                        tabIndex={0}
                                     >
+                                        {isQueueMode && rec.id && (
+                                            <input
+                                                type="checkbox"
+                                                className="queue-select"
+                                                aria-label={`Select ${rec.title}`}
+                                                checked={selectedIds.has(rec.id)}
+                                                disabled={mutationBusy}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onChange={(event) => setSelectedIds(current => {
+                                                    const next = new Set(current);
+                                                    if (event.target.checked) next.add(rec.id!); else next.delete(rec.id!);
+                                                    return next;
+                                                })}
+                                            />
+                                        )}
                                         <div className="workspace-item-poster">
                                             {rec.posterUrl ? (
                                                 <img src={rec.posterUrl} alt={rec.title} />
@@ -265,7 +348,7 @@ export function RecommendationsWorkspace({
                                                 </p>
                                             )}
                                         </div>
-                                    </button>
+                                    </div>
                                 );
                             })}
 
@@ -290,7 +373,7 @@ export function RecommendationsWorkspace({
                         <RecommendationDetail
                             recommendation={selectedRecommendation}
                             feedbackProfile={feedbackProfile}
-                            loading={loading}
+                            loading={loading || Boolean(selectedRecommendation?.id && mutatingIds.has(selectedRecommendation.id))}
                             onAction={onAction}
                             emptyState={copy.detailEmpty}
                         />

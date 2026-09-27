@@ -216,12 +216,13 @@ describe('Engine Integration Tests (Hybrid Mocking)', () => {
 
     describe('approveAndAdd', () => {
         beforeEach(() => {
-            vi.spyOn(database, 'getRecommendations').mockReturnValue([
+            const recommendations = [
                 { id: '1', title: 'Test Movie', mediaType: 'movie', tmdbId: 100 },
                 { id: '2', title: 'Test Series', mediaType: 'series', tvdbId: 200 },
                 { id: '3', title: 'Missing Series', mediaType: 'series', tmdbId: 300 }, // No tvdb
                 { id: '4', title: 'Bad Type', mediaType: 'unknown' as never }
-            ] as Recommendation[]);
+            ] as Recommendation[];
+            vi.spyOn(database, 'getRecommendationById').mockImplementation(id => recommendations.find(item => item.id === id));
         });
 
         it('should return error if recommendation not found', async () => {

@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { config } from './config';
 import type { FeedbackProfile, FeedbackReason, Recommendation, LogEntry, MediaType, RecommendationStatus, WatchedItem } from './types';
+import type { RecommendationQuery } from './recommendation-query';
 
 let db: Database.Database | null = null;
 
@@ -287,26 +288,59 @@ export function addRecommendation(rec: Recommendation): Recommendation {
     return { ...rec, id };
 }
 
-export function getRecommendations(status?: RecommendationStatus | RecommendationStatus[], limit = 50, offset = 0): Recommendation[] {
+function recommendationQueryParts(query: RecommendationQuery) {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.statusFilterPresent) {
+        if (query.statuses.length === 0) clauses.push('0 = 1');
+        else {
+            clauses.push(`status IN (${query.statuses.map(() => '?').join(', ')})`);
+            params.push(...query.statuses);
+        }
+    }
+    if (query.search) {
+        const escaped = query.search.replace(/[\\%_]/g, value => `\\${value}`);
+        clauses.push(`(title LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR overview LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR ai_reasoning LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR feedback_reason LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR feedback_notes LIKE ? ESCAPE '\\' COLLATE NOCASE)`);
+        params.push(...Array(5).fill(`%${escaped}%`));
+    }
+    return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
+}
+
+const recommendationOrder: Record<RecommendationQuery['sort'], string> = {
+    newest: 'created_at DESC, id ASC',
+    oldest: 'created_at ASC, id ASC',
+    rating: 'vote_average IS NULL ASC, vote_average DESC, created_at DESC, id ASC',
+    title: 'title COLLATE NOCASE ASC, year ASC, id ASC',
+    source: 'source ASC, created_at DESC, id ASC',
+};
+
+export function getRecommendations(query: RecommendationQuery): Recommendation[];
+export function getRecommendations(status?: RecommendationStatus | RecommendationStatus[], limit?: number, offset?: number): Recommendation[];
+export function getRecommendations(statusOrQuery?: RecommendationStatus | RecommendationStatus[] | RecommendationQuery, limit = 50, offset = 0): Recommendation[] {
     const db = getDatabase();
     resetExpiredNotNowRecommendations(db);
-    let query = 'SELECT * FROM recommendations';
-    const params: Array<RecommendationStatus | number> = [];
-    const statuses = Array.isArray(status)
-        ? status.filter(Boolean)
-        : status
-            ? [status]
-            : [];
-
-    if (statuses.length > 0) {
-        query += ` WHERE status IN (${statuses.map(() => '?').join(', ')})`;
-        params.push(...statuses);
-    }
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-    params.push(limit, offset);
-
-    const rows = db.prepare(query).all(...params) as Record<string, unknown>[];
+    const normalized: RecommendationQuery = typeof statusOrQuery === 'object' && !Array.isArray(statusOrQuery)
+        ? statusOrQuery
+        : {
+            statuses: Array.isArray(statusOrQuery) ? statusOrQuery.filter(Boolean) : statusOrQuery ? [statusOrQuery] : [],
+            statusFilterPresent: Boolean(statusOrQuery), sort: 'newest', limit, offset,
+        };
+    const { where, params } = recommendationQueryParts(normalized);
+    const sql = `SELECT * FROM recommendations${where} ORDER BY ${recommendationOrder[normalized.sort]} LIMIT ? OFFSET ?`;
+    const rows = db.prepare(sql).all(...params, normalized.limit, normalized.offset) as Record<string, unknown>[];
     return rows.map(rowToRecommendation);
+}
+
+export function getMatchingRecommendationCount(query: RecommendationQuery): number {
+    const database = getDatabase();
+    resetExpiredNotNowRecommendations(database);
+    const { where, params } = recommendationQueryParts(query);
+    const row = database.prepare(`SELECT COUNT(*) AS count FROM recommendations${where}`).get(...params) as { count: number };
+    return row.count;
 }
 
 export function updateRecommendationStatus(
@@ -521,6 +555,11 @@ function rowToRecommendation(row: Record<string, unknown>): Recommendation {
     };
 }
 
+export function getRecommendationById(id: string): Recommendation | undefined {
+    const row = getDatabase().prepare('SELECT * FROM recommendations WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? rowToRecommendation(row) : undefined;
+}
+
 function topKeys<T extends string>(counts: Map<T, number>, minCount = 1): T[] {
     return Array.from(counts.entries())
         .filter(([, count]) => count >= minCount)
@@ -557,6 +596,8 @@ export function getFeedbackProfile(limit = 200): FeedbackProfile {
 
     for (const row of rows) {
         const genres = row.genres ? (JSON.parse(row.genres) as string[]) : [];
+        // Roadmap: watched may later be separated from positive preference signals because
+        // consumption does not necessarily imply liking. Preserve current learning for now.
         if (row.status === 'added' || row.status === 'watched') {
             pushMediaType(preferredMediaTypes, row.media_type);
             for (const genre of genres) {

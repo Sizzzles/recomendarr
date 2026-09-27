@@ -3,6 +3,8 @@ import type { ArrFolder, ArrProfile } from './models';
 
 interface AddToLibraryModalProps {
     recommendation: Recommendation | null;
+    count?: number;
+    resultDetails?: string[];
     profiles: ArrProfile[];
     folders: ArrFolder[];
     selectedProfile: number;
@@ -19,6 +21,8 @@ interface AddToLibraryModalProps {
 
 export function AddToLibraryModal({
     recommendation,
+    count = 1,
+    resultDetails = [],
     profiles,
     folders,
     selectedProfile,
@@ -55,13 +59,20 @@ export function AddToLibraryModal({
                             <div className="sheet-poster placeholder">No poster</div>
                         )}
                         <div className="sheet-hero-copy">
-                            <h4>{recommendation.title}</h4>
+                            <h4>{count > 1 ? `${count} selected titles` : recommendation.title}</h4>
                             <p>{recommendation.mediaType === 'movie' ? 'Movie' : 'Series'}{recommendation.year ? ` · ${recommendation.year}` : ''}</p>
                             <span className="helper-copy">
                                 Choose the default quality profile and storage target before sending this to your library manager.
                             </span>
                         </div>
                     </div>
+
+                    {resultDetails.length > 0 && (
+                        <details className="bulk-add-errors" open>
+                            <summary>{resultDetails.length} title{resultDetails.length === 1 ? '' : 's'} could not be added</summary>
+                            <ul>{resultDetails.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>
+                        </details>
+                    )}
 
                     {loading ? (
                         <div className="sheet-loading">
@@ -122,7 +133,7 @@ export function AddToLibraryModal({
                                 Adding...
                             </>
                         ) : (
-                            'Add to library'
+                            count > 1 ? `Add ${count} titles` : 'Add to library'
                         )}
                     </button>
                 </div>

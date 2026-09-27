@@ -3,7 +3,7 @@ import { getRecommendationsForItem, getTmdbExternalIds, searchTmdb, discoverByFi
 import { getAiRecommendations, generateTasteProfile, TasteProfile } from './ai-recommender';
 import { addMovieToRadarr, getAllRadarrMovies } from './radarr';
 import { addSeriesToSonarr, getAllSonarrSeries } from './sonarr';
-import { addRecommendation, addLog, getFeedbackProfile, getRecommendations, getWatchedMediaSignalSets, syncWatchedMediaState, updateRecommendationStatus } from './database';
+import { addRecommendation, addLog, getFeedbackProfile, getRecommendationById, getWatchedMediaSignalSets, syncWatchedMediaState, updateRecommendationStatus } from './database';
 import { getConfig } from './config';
 import { notifyRunResult } from './notifications';
 import type { FeedbackProfile, Recommendation, WatchedItem } from './types';
@@ -558,8 +558,7 @@ export async function approveAndAdd(
     recommendationId: string,
     options: AddOptions = {}
 ): Promise<{ success: boolean; message: string }> {
-    const recs = getRecommendations();
-    const rec = recs.find((r) => r.id === recommendationId);
+    const rec = getRecommendationById(recommendationId);
     if (!rec) return { success: false, message: 'Recommendation not found' };
 
     try {
@@ -694,4 +693,48 @@ export async function approveAndAdd(
     } catch (err) {
         return { success: false, message: (err as Error).message };
     }
+}
+
+export interface BulkAddOptions extends AddOptions {
+    mediaType: 'movie' | 'series';
+}
+
+export interface BulkAddResult {
+    results: Array<{ id: string; outcome: 'added' | 'failed' | 'unchanged'; message: string }>;
+    totals: { added: number; failed: number; unchanged: number };
+}
+
+export class BulkAddValidationError extends Error {
+    readonly code = 'INVALID_BATCH';
+}
+
+export async function approveAndAddMany(
+    recommendationIds: string[],
+    options: BulkAddOptions,
+    processItem: (id: string, options: AddOptions) => Promise<{ success: boolean; message: string }> = approveAndAdd,
+): Promise<BulkAddResult> {
+    const ids = Array.from(new Set(recommendationIds.map(id => id.trim()).filter(Boolean)));
+    if (ids.length === 0 || ids.length > 100) throw new BulkAddValidationError('Bulk Add requires 1 to 100 unique recommendation IDs');
+    const recommendations = ids.map(id => getRecommendationById(id));
+    if (recommendations.some(item => !item)) throw new BulkAddValidationError('One or more recommendations were not found');
+    if (recommendations.some(item => item!.mediaType !== options.mediaType)) throw new BulkAddValidationError('Bulk Add requires every recommendation to use the same media type');
+    if (recommendations.some(item => item!.status !== 'pending')) throw new BulkAddValidationError('Bulk Add is available only for pending recommendations');
+
+    const results: BulkAddResult['results'] = [];
+    for (const id of ids) {
+        try {
+            const result = await processItem(id, options);
+            results.push({ id, outcome: result.success ? 'added' : 'failed', message: result.message });
+        } catch (error) {
+            results.push({ id, outcome: 'failed', message: (error as Error).message });
+        }
+    }
+    return {
+        results,
+        totals: {
+            added: results.filter(item => item.outcome === 'added').length,
+            failed: results.filter(item => item.outcome === 'failed').length,
+            unchanged: results.filter(item => item.outcome === 'unchanged').length,
+        },
+    };
 }
