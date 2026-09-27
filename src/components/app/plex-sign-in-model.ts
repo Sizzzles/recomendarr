@@ -27,6 +27,7 @@ export type PlexSignInEvent =
     | { type: 'choose'; serverId: string }
     | { type: 'connected'; server: ConnectedPlexServer }
     | { type: 'failed'; message: string; token?: string }
+    | { type: 'popup_closed' }
     | { type: 'reset' };
 
 export const initialPlexSignInState: PlexSignInState = { status: 'idle' };
@@ -46,6 +47,15 @@ export function reducePlexSignInState(state: PlexSignInState, event: PlexSignInE
         }
         case 'connected': return { status: 'connected', server: event.server };
         case 'failed': return { status: 'error', message: event.message };
+        case 'popup_closed': return { status: 'error', message: 'Plex sign-in was closed before it finished.' };
         case 'reset': return initialPlexSignInState;
     }
+}
+
+export function getPlexPopupFeatures(viewportWidth: number, viewportHeight: number): string {
+    const width = Math.min(700, viewportWidth);
+    const height = Math.min(760, viewportHeight);
+    const left = Math.max(0, Math.floor((viewportWidth - width) / 2));
+    const top = Math.max(0, Math.floor((viewportHeight - height) / 2));
+    return `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
 }

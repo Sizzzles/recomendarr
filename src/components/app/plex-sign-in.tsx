@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import {
     initialPlexSignInState,
+    getPlexPopupFeatures,
     reducePlexSignInState,
     type ConnectedPlexServer,
 } from './plex-sign-in-model';
+import { discoverConnectedPlexUsers, type DiscoveredPlexUser } from './plex-sign-in-client';
 
 interface PlexSignInProps {
-    onConnectionChange?: (server: ConnectedPlexServer | null) => void;
+    onConnectionChange?: (server: ConnectedPlexServer | null, users?: DiscoveredPlexUser[]) => void;
     toast?: (message: string, type?: string) => void;
 }
 
@@ -43,12 +45,18 @@ export function PlexSignIn({ onConnectionChange, toast }: PlexSignInProps) {
 
     const start = async () => {
         dispatch({ type: 'start' });
-        popupRef.current = window.open('about:blank', '_blank');
-        if (popupRef.current) popupRef.current.opener = null;
+        popupRef.current = window.open(
+            'about:blank',
+            'recomendarr-plex-auth',
+            getPlexPopupFeatures(window.screen.availWidth, window.screen.availHeight)
+        );
+        if (!popupRef.current) {
+            fail(new Error('Allow popups for Recomendarr, then try again.'));
+            return;
+        }
         try {
             const data = await plexRequest({ action: 'start' });
-            if (popupRef.current) popupRef.current.location.href = data.authUrl;
-            else window.open(data.authUrl, '_blank', 'noopener,noreferrer');
+            popupRef.current.location.href = data.authUrl;
             dispatch({ type: 'started', flowId: data.flowId });
         } catch (error) {
             popupRef.current?.close();
@@ -63,8 +71,16 @@ export function PlexSignIn({ onConnectionChange, toast }: PlexSignInProps) {
             try {
                 const data = await plexRequest({ action: 'poll', flowId: state.flowId });
                 if (cancelled) return;
-                if (data.status === 'servers') dispatch({ type: 'servers', servers: data.servers });
+                if (data.status === 'servers') {
+                    popupRef.current?.close();
+                    window.focus();
+                    dispatch({ type: 'servers', servers: data.servers });
+                }
                 else if (data.status === 'no_servers') fail(new Error('No available Plex Media Server was found for this account.'));
+                else if (popupRef.current?.closed) {
+                    dispatch({ type: 'popup_closed' });
+                    toast?.('Plex sign-in was closed before it finished.', 'error');
+                }
             } catch (error) {
                 if (!cancelled) fail(error);
             }
@@ -72,18 +88,28 @@ export function PlexSignIn({ onConnectionChange, toast }: PlexSignInProps) {
         void poll();
         const timer = window.setInterval(poll, 1500);
         return () => { cancelled = true; window.clearInterval(timer); };
-    }, [fail, state]);
+    }, [fail, state, toast]);
 
     useEffect(() => {
         if (state.status !== 'selecting') return;
         let cancelled = false;
         plexRequest({ action: 'select', flowId: state.flowId, serverId: state.serverId })
-            .then((data) => {
+            .then(async (data) => {
                 if (cancelled) return;
-                dispatch({ type: 'connected', server: data.server });
-                onConnectionChange?.(data.server);
                 popupRef.current?.close();
-                toast?.(`Connected to ${data.server.name}`, 'success');
+                window.focus();
+                try {
+                    const users = await discoverConnectedPlexUsers();
+                    if (cancelled) return;
+                    dispatch({ type: 'connected', server: data.server });
+                    onConnectionChange?.(data.server, users);
+                    toast?.(`Connected to ${data.server.name}`, 'success');
+                } catch (error) {
+                    if (cancelled) return;
+                    dispatch({ type: 'connected', server: data.server });
+                    onConnectionChange?.(data.server, []);
+                    toast?.((error as Error).message, 'error');
+                }
             })
             .catch((error) => { if (!cancelled) fail(error); });
         return () => { cancelled = true; };

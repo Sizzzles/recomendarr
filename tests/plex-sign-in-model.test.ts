@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialPlexSignInState, reducePlexSignInState } from '../src/components/app/plex-sign-in-model';
+import { getPlexPopupFeatures, initialPlexSignInState, reducePlexSignInState } from '../src/components/app/plex-sign-in-model';
 
 const home = { id: 'home', name: 'Home', owned: true, available: true };
 const shared = { id: 'shared', name: 'Shared', owned: false, available: true };
@@ -41,5 +41,17 @@ describe('Plex sign-in UI state', () => {
         expect(state).toEqual({ status: 'error', message: 'Plex sign-in expired' });
         expect(JSON.stringify(state)).not.toContain('do-not-render');
         expect(reducePlexSignInState(state, { type: 'reset' })).toEqual(initialPlexSignInState);
+    });
+
+    it('builds centered popup-window features instead of opening a tab', () => {
+        expect(getPlexPopupFeatures(1920, 1080)).toBe(
+            'popup=yes,width=700,height=760,left=610,top=160,resizable=yes,scrollbars=yes'
+        );
+    });
+
+    it('makes a manually closed sign-in popup retryable', () => {
+        expect(reducePlexSignInState({ status: 'polling', flowId: 'flow' }, { type: 'popup_closed' })).toEqual({
+            status: 'error', message: 'Plex sign-in was closed before it finished.',
+        });
     });
 });

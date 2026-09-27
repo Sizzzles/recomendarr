@@ -6,6 +6,7 @@ import type { SettingsFormData } from './models';
 import { DEFAULT_SETTINGS_FORM } from './models';
 import { PlexSignIn } from './plex-sign-in';
 import type { ConnectedPlexServer } from './plex-sign-in-model';
+import type { DiscoveredPlexUser } from './plex-sign-in-client';
 
 interface SetupWizardProps {
     step: number;
@@ -37,12 +38,15 @@ export function SetupWizard({
         setForm((prev) => ({ ...prev, [key]: value }));
     };
 
-    const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null) => {
+    const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null, users: DiscoveredPlexUser[] = []) => {
         setPlexConnected(Boolean(server));
+        setDiscovery((previous) => ({ ...previous, mediaUsers: users }));
         setForm((previous) => ({
             ...previous,
             media_server_url: server?.url || '',
             media_server_api_key: '',
+            media_server_user_id: server && !previous.media_server_user_id && users.length === 1
+                ? users[0].id : previous.media_server_user_id,
         }));
     }, []);
 

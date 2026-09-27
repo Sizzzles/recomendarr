@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS_FORM, SETTINGS_TABS } from './models';
 import { buildFeedbackImpactSummary, getFeedbackReasonBreakdown, getSchedulePreset } from './utils';
 import { PlexSignIn } from './plex-sign-in';
 import type { ConnectedPlexServer } from './plex-sign-in-model';
+import type { DiscoveredPlexUser } from './plex-sign-in-client';
 
 interface SettingsPageProps {
     connResults: Record<string, ConnectionResult>;
@@ -105,12 +106,15 @@ export function SettingsPage({
         }
     };
 
-    const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null) => {
+    const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null, users: DiscoveredPlexUser[] = []) => {
         setPlexConnected(Boolean(server));
+        setDiscovery((previous) => ({ ...previous, mediaUsers: users }));
         setFormData((previous) => ({
             ...previous,
             media_server_url: server?.url || '',
             media_server_api_key: '',
+            media_server_user_id: server && !previous.media_server_user_id && users.length === 1
+                ? users[0].id : previous.media_server_user_id,
         }));
     }, []);
 
