@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getPlexPopupFeatures, initialPlexSignInState, reducePlexSignInState } from '../src/components/app/plex-sign-in-model';
+import {
+    canContinueMediaSetup,
+    getPlexPopupFeatures,
+    isMediaServerConfigured,
+    initialPlexSignInState,
+    reducePlexSignInState,
+} from '../src/components/app/plex-sign-in-model';
 
 const home = { id: 'home', name: 'Home', owned: true, available: true };
 const shared = { id: 'shared', name: 'Shared', owned: false, available: true };
@@ -53,5 +59,16 @@ describe('Plex sign-in UI state', () => {
         expect(reducePlexSignInState({ status: 'polling', flowId: 'flow' }, { type: 'popup_closed' })).toEqual({
             status: 'error', message: 'Plex sign-in was closed before it finished.',
         });
+    });
+
+    it('uses authenticated Plex state ahead of empty manual fallback fields', () => {
+        expect(isMediaServerConfigured('plex', true, '', '')).toBe(true);
+        expect(canContinueMediaSetup('plex', true, '', '', '')).toBe(true);
+    });
+
+    it('uses manually entered Plex credentials only as a fallback', () => {
+        expect(isMediaServerConfigured('plex', false, 'http://plex:32400', 'manual-token')).toBe(true);
+        expect(isMediaServerConfigured('plex', false, 'http://plex:32400', '')).toBe(false);
+        expect(canContinueMediaSetup('jellyfin', false, 'http://jellyfin', 'key', 'user')).toBe(true);
     });
 });

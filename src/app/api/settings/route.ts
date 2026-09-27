@@ -13,7 +13,11 @@ export async function GET() {
 
         const mediaApiKeyMask = config.mediaServer.apiKey ? '••••' + config.mediaServer.apiKey.slice(-4) : '';
         const safeRaw = { ...savedSettings };
-        if (safeRaw.media_server_api_key) safeRaw.media_server_api_key = mediaApiKeyMask;
+        const plexAuthenticated = Boolean(savedSettings.plex_server_identifier);
+        if (plexAuthenticated) {
+            delete safeRaw.media_server_url;
+            delete safeRaw.media_server_api_key;
+        } else if (safeRaw.media_server_api_key) safeRaw.media_server_api_key = mediaApiKeyMask;
         if (safeRaw.plex_token) safeRaw.plex_token = '••••' + safeRaw.plex_token.slice(-4);
 
         return NextResponse.json({
@@ -24,6 +28,8 @@ export async function GET() {
                     url: config.mediaServer.url,
                     apiKey: mediaApiKeyMask,
                     hasApiKey: !!config.mediaServer.apiKey,
+                    authenticated: plexAuthenticated,
+                    serverName: savedSettings.plex_server_name || '',
                 },
                 sonarr: {
                     url: config.sonarr.url,
@@ -85,11 +91,16 @@ export async function PUT(request: NextRequest) {
         }
 
         const storedMediaKey = getConfig().mediaServer.apiKey;
+        const savedSettings = getAllSavedSettings();
         const storedMediaMask = storedMediaKey ? '••••' + storedMediaKey.slice(-4) : '';
         if (normalized.media_server_api_key?.startsWith('••••') ||
             normalized.media_server_api_key === storedMediaMask ||
             (normalized.media_server_type === 'plex' && normalized.media_server_api_key === '' && Boolean(storedMediaKey))) {
             delete normalized.media_server_api_key;
+        }
+        if (savedSettings.plex_server_identifier && normalized.media_server_type === 'plex' &&
+            normalized.media_server_url === '') {
+            delete normalized.media_server_url;
         }
 
         const schedulerEnabled = normalized.scheduler_enabled === 'true';

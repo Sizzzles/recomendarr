@@ -59,3 +59,24 @@ export function getPlexPopupFeatures(viewportWidth: number, viewportHeight: numb
     const top = Math.max(0, Math.floor((viewportHeight - height) / 2));
     return `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
 }
+
+export function isMediaServerConfigured(
+    type: 'plex' | 'jellyfin' | 'emby',
+    plexAuthenticated: boolean,
+    manualUrl: string,
+    manualToken: string
+): boolean {
+    if (type === 'plex' && plexAuthenticated) return true;
+    return Boolean(manualUrl && manualToken);
+}
+
+export function canContinueMediaSetup(
+    type: 'plex' | 'jellyfin' | 'emby',
+    plexAuthenticated: boolean,
+    manualUrl: string,
+    manualToken: string,
+    userId: string
+): boolean {
+    if (!isMediaServerConfigured(type, plexAuthenticated, manualUrl, manualToken)) return false;
+    return type === 'plex' || Boolean(userId);
+}

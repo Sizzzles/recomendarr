@@ -128,7 +128,7 @@ export function PlexSignIn({ onConnectionChange, toast }: PlexSignInProps) {
         <div className="plex-sign-in-card">
             {state.status === 'connected' ? (
                 <>
-                    <div><strong>Connected to {state.server.name}</strong><small>{state.server.url}</small></div>
+                    <div><strong>Connected to {state.server.name}</strong></div>
                     <div className="plex-sign-in-actions">
                         <button type="button" className="btn btn-ghost btn-sm" onClick={start}>Change server</button>
                         <button type="button" className="btn btn-ghost btn-sm" onClick={disconnect}>Disconnect</button>

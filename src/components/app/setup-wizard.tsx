@@ -5,7 +5,7 @@ import { SetupDiscoveryStep } from './setup-discovery-step';
 import type { SettingsFormData } from './models';
 import { DEFAULT_SETTINGS_FORM } from './models';
 import { PlexSignIn } from './plex-sign-in';
-import type { ConnectedPlexServer } from './plex-sign-in-model';
+import { canContinueMediaSetup, type ConnectedPlexServer } from './plex-sign-in-model';
 import type { DiscoveredPlexUser } from './plex-sign-in-client';
 
 interface SetupWizardProps {
@@ -26,6 +26,7 @@ export function SetupWizard({
     const [testResult, setTestResult] = useState<boolean | null>(null);
     const [saving, setSaving] = useState(false);
     const [plexConnected, setPlexConnected] = useState(false);
+    const [plexServerName, setPlexServerName] = useState('');
     const [discovery, setDiscovery] = useState({
         mediaUsers: [] as Array<{ id: string; name: string }>,
         sonarrProfiles: [] as Array<{ id: number; name: string }>,
@@ -40,14 +41,8 @@ export function SetupWizard({
 
     const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null, users: DiscoveredPlexUser[] = []) => {
         setPlexConnected(Boolean(server));
+        setPlexServerName(server?.name || '');
         setDiscovery((previous) => ({ ...previous, mediaUsers: users }));
-        setForm((previous) => ({
-            ...previous,
-            media_server_url: server?.url || '',
-            media_server_api_key: '',
-            media_server_user_id: server && !previous.media_server_user_id && users.length === 1
-                ? users[0].id : previous.media_server_user_id,
-        }));
     }, []);
 
     const handleDiscovery = (service: string, data: Record<string, unknown>) => {
@@ -94,6 +89,7 @@ export function SetupWizard({
             const testSettings = { ...form } as Record<string, string>;
             if (service === 'mediaServer' && form.media_server_type === 'plex' && plexConnected) {
                 delete testSettings.media_server_api_key;
+                delete testSettings.media_server_url;
             }
             const response = await fetch('/api/test-connection', {
                 method: 'POST',
@@ -193,7 +189,10 @@ export function SetupWizard({
                                 <button
                                     className="btn btn-primary"
                                     onClick={() => { setStep(1); setTestResult(null); }}
-                                    disabled={!form.media_server_url || (!(form.media_server_type === 'plex' && plexConnected) && !form.media_server_api_key) || (form.media_server_type !== 'plex' && !form.media_server_user_id)}
+                                    disabled={!canContinueMediaSetup(
+                                        form.media_server_type, plexConnected, form.media_server_url,
+                                        form.media_server_api_key, form.media_server_user_id
+                                    )}
                                 >
                                     Continue
                                 </button>
@@ -458,7 +457,7 @@ export function SetupWizard({
                             <div className="review-card">
                                 <span>Media server</span>
                                 <strong>{serverLabel}</strong>
-                                <p>{form.media_server_url || 'Not set'}</p>
+                                <p>{form.media_server_type === 'plex' && plexConnected ? plexServerName : form.media_server_url || 'Not set'}</p>
                                 <small>{form.media_server_user_id || 'Default / token-auth user'}</small>
                             </div>
                             <div className="review-card">

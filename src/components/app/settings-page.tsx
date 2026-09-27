@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS_FORM, SETTINGS_TABS } from './models';
 import { buildFeedbackImpactSummary, getFeedbackReasonBreakdown, getSchedulePreset } from './utils';
 import { PlexSignIn } from './plex-sign-in';
 import type { ConnectedPlexServer } from './plex-sign-in-model';
+import { isMediaServerConfigured } from './plex-sign-in-model';
 import type { DiscoveredPlexUser } from './plex-sign-in-client';
 
 interface SettingsPageProps {
@@ -109,13 +110,6 @@ export function SettingsPage({
     const handlePlexConnectionChange = useCallback((server: ConnectedPlexServer | null, users: DiscoveredPlexUser[] = []) => {
         setPlexConnected(Boolean(server));
         setDiscovery((previous) => ({ ...previous, mediaUsers: users }));
-        setFormData((previous) => ({
-            ...previous,
-            media_server_url: server?.url || '',
-            media_server_api_key: '',
-            media_server_user_id: server && !previous.media_server_user_id && users.length === 1
-                ? users[0].id : previous.media_server_user_id,
-        }));
     }, []);
 
     const handleDiscovery = (service: string, data: ConnectionResult['data']) => {
@@ -162,6 +156,7 @@ export function SettingsPage({
         if (service === 'mediaServer' && formData.media_server_type === 'plex' &&
             (plexConnected || formData.media_server_api_key.startsWith('••••'))) {
             delete testSettings.media_server_api_key;
+            if (plexConnected) delete testSettings.media_server_url;
         }
         const data = await onTest(service, testSettings);
         if (data?.success) {
@@ -220,7 +215,12 @@ export function SettingsPage({
     const radarrProfiles = discovery.radarrProfiles.length > 0 ? discovery.radarrProfiles : (connResults.radarr?.data?.profiles || []);
     const radarrRootFolders = discovery.radarrRootFolders.length > 0 ? discovery.radarrRootFolders : (connResults.radarr?.data?.rootFolders || []);
 
-    const mediaStatus = serviceHealth(connResults.mediaServer, Boolean(formData.media_server_url && formData.media_server_api_key));
+    const mediaConfigured = isMediaServerConfigured(
+        formData.media_server_type, plexConnected, formData.media_server_url, formData.media_server_api_key
+    );
+    const mediaStatus = plexConnected
+        ? { label: 'Connected', status: 'healthy' as const }
+        : serviceHealth(connResults.mediaServer, mediaConfigured);
     const sonarrStatus = serviceHealth(connResults.sonarr, Boolean(formData.sonarr_url && formData.sonarr_api_key));
     const radarrStatus = serviceHealth(connResults.radarr, Boolean(formData.radarr_url && formData.radarr_api_key));
     const aiStatus = serviceHealth(connResults.ai, Boolean(formData.ai_enabled === 'true' && formData.ai_provider_url && formData.ai_api_key));

@@ -74,4 +74,32 @@ describe('settings API Plex token handling', () => {
         expect(response.status).toBe(200);
         expect(mocks.saveSettings).toHaveBeenCalledWith({ media_server_type: 'plex' });
     });
+
+    it('does not overwrite authenticated Plex credentials with empty manual fallback fields', async () => {
+        mocks.getAllSavedSettings.mockReturnValue({
+            plex_server_identifier: 'server-1',
+            media_server_url: 'https://authenticated-plex',
+            media_server_api_key: 'authenticated-token',
+        });
+        const response = await PUT(new Request('http://localhost/api/settings', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: {
+                media_server_type: 'plex', media_server_url: '', media_server_api_key: '', scheduler_enabled: 'false',
+            } }),
+        }) as never);
+        expect(response.status).toBe(200);
+        expect(mocks.saveSettings).toHaveBeenCalledWith({ media_server_type: 'plex', scheduler_enabled: 'false' });
+    });
+
+    it('reports authenticated Plex state without filling manual fallback fields', async () => {
+        mocks.getAllSavedSettings.mockReturnValue({
+            plex_server_identifier: 'server-1', plex_server_name: 'Living Room',
+            media_server_url: 'https://authenticated-plex', media_server_api_key: 'authenticated-token',
+        });
+        const response = await GET();
+        const body = await response.json();
+        expect(body.config.mediaServer).toMatchObject({ authenticated: true, serverName: 'Living Room' });
+        expect(body.raw.media_server_url).toBeUndefined();
+        expect(body.raw.media_server_api_key).toBeUndefined();
+    });
 });
