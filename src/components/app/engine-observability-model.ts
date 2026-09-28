@@ -13,7 +13,26 @@ export function formatElapsed(milliseconds: number): string {
 }
 
 export function prominentRunIssue(latest: EngineRun | null, lastSuccess: EngineRun | null): EngineRun | null {
-    if (!latest || (latest.status !== 'failed' && latest.status !== 'partial')) return null;
+    if (!latest || (latest.status !== 'failed' && latest.status !== 'partial' && latest.status !== 'interrupted')) return null;
     if (lastSuccess && Date.parse(lastSuccess.startedAt) >= Date.parse(latest.startedAt)) return null;
     return latest;
+}
+
+export function clearActiveRunAfterStatusFailure<T extends { activeRun: EngineRun | null }>(state: T): T {
+    return { ...state, activeRun: null };
+}
+
+export function prominentRunIssueHeading(status: EngineRun['status']): string {
+    if (status === 'interrupted') return 'Engine run was interrupted';
+    if (status === 'failed') return 'Engine run failed';
+    return 'Engine run completed partially';
+}
+
+export function primaryRunIssueStage(run: EngineRun): EngineRun['stages'][number] | undefined {
+    if (run.errorMessage) {
+        const owner = run.stages.find(stage => stage.failures.includes(run.errorMessage!));
+        if (owner) return owner;
+    }
+    return run.stages.find(stage => stage.name === run.currentStage && stage.status === 'failed')
+        || run.stages.find(stage => stage.status === 'failed');
 }

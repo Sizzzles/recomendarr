@@ -12,9 +12,19 @@ export function EngineRunHistory({ runs }: { runs: EngineRun[] }) {
             <p className="run-id">Run ID: <code>{run.id}</code> · Engine {run.engineVersion}</p>
             {run.errorMessage && <p className="engine-error-copy">{run.errorMessage}</p>}
             <p>{run.summary.watchedItemsProcessed} watched · {run.summary.candidatesConsidered} candidates · {run.summary.recommendationsSaved} saved · {run.summary.errorCount} errors</p>
-            <ul className="engine-stage-list">{run.stages.map(stage => <li key={stage.name}><div><span>{stage.name.replaceAll('_', ' ')}</span>
-                {stage.skipReason && <small>{stage.skipReason}</small>}{stage.failures.map(failure => <small key={failure}>{failure}</small>)}</div>
-                <span>{stage.status}{stage.durationMs !== undefined ? ` · ${formatElapsed(stage.durationMs)}` : ''}</span></li>)}</ul>
+            <ul className="engine-stage-list engine-stage-history">{run.stages.map(stage => {
+                const messages = [...(stage.skipReason ? [stage.skipReason] : []), ...stage.failures];
+                const label = stage.name.replaceAll('_', ' ');
+                return <li key={stage.name}>
+                    <div className="engine-stage-heading">
+                        <span className="engine-stage-name">{label}</span>
+                        <span className="engine-stage-state">{stage.status}{stage.durationMs !== undefined ? ` · ${formatElapsed(stage.durationMs)}` : ''}</span>
+                    </div>
+                    {messages.length > 0 && <ul className="engine-stage-messages" aria-label={`${label} details`}>
+                        {messages.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}
+                    </ul>}
+                </li>;
+            })}</ul>
         </details>) : <p className="helper-copy">Run history will appear after the engine runs.</p>}</div>
     </section>;
 }

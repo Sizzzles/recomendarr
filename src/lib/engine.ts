@@ -244,7 +244,15 @@ export async function runRecommendationEngine(
             result.errors.push(msg);
             runTracker.recordAttempt('syncing_watch_history', 'failure', msg);
             runTracker.completeStage('syncing_watch_history');
-            runTracker.finish({ coreCompleted: false });
+            runTracker.finish({
+                coreCompleted: false,
+                coreFailure: {
+                    stage: 'syncing_watch_history',
+                    message: msg,
+                    alreadyCounted: true,
+                    stoppedReason: 'Run stopped after watch-history synchronization failed',
+                },
+            });
             addLog({ level: 'ERROR', message: msg, source: 'engine' });
             return result;
         }
@@ -432,8 +440,7 @@ export async function runRecommendationEngine(
         const allRecs = [...allTmdbRecs, ...aiRecs]
             .toSorted((a, b) => scoreRecommendation(b, feedbackProfile, preferredLanguages) - scoreRecommendation(a, feedbackProfile, preferredLanguages));
         const seen = new Set<string>();
-        const uniqueRecs: Recommendation[] = [];
-        const newlySavedCandidates = new Set<Recommendation>();
+        const newRecommendations: Recommendation[] = [];
 
         for (const rec of allRecs) {
             const key = rec.tmdbId ? `tmdb:${rec.tmdbId}` : `title:${rec.title.toLowerCase()}`;
@@ -575,25 +582,25 @@ export async function runRecommendationEngine(
             // Save to DB
             const saved = addRecommendationWithResult(rec);
             runTracker.recordCandidateDisposition(saved.inserted ? 'saved' : 'existing_or_watched');
-            if (saved.inserted) newlySavedCandidates.add(rec);
-            uniqueRecs.push(rec);
+            // "New" and auto-add both mean a row inserted during this run.
+            if (saved.inserted) newRecommendations.push(saved.recommendation);
         }
         runTracker.completeStage('processing_candidates');
 
-        result.totalNew = uniqueRecs.length;
-        addLog({ level: 'INFO', message: `💾 Saved ${uniqueRecs.length} new unique recommendations`, source: 'engine' });
+        result.totalNew = newRecommendations.length;
+        addLog({ level: 'INFO', message: `💾 Saved ${newRecommendations.length} new unique recommendations`, source: 'engine' });
 
         // Step 5: Auto-add if configured
         const schedulerCfg = getConfig().scheduler;
         if (schedulerCfg.autoAdd) {
             runTracker.startStage('auto_adding');
             let applicableAutoAddAttempts = 0;
-            for (const rec of uniqueRecs) {
+            for (const rec of newRecommendations) {
                 try {
                     if (rec.mediaType === 'movie' && rec.tmdbId) {
                         if (!cfg.radarr.url || !cfg.radarr.apiKey) continue;
                         applicableAutoAddAttempts += 1;
-                        if (newlySavedCandidates.has(rec)) runTracker.updateSummary({ autoAddAttempted: runTracker.getRun().summary.autoAddAttempted + 1 });
+                        runTracker.updateSummary({ autoAddAttempted: runTracker.getRun().summary.autoAddAttempted + 1 });
                         const res = await addMovieToRadarr(rec.tmdbId);
                         if (res.success) {
                             radarrHealth.recordSuccess('Radarr operation succeeded');
@@ -605,7 +612,7 @@ export async function runRecommendationEngine(
                     } else if (rec.mediaType === 'series' && rec.tvdbId) {
                         if (!cfg.sonarr.url || !cfg.sonarr.apiKey) continue;
                         applicableAutoAddAttempts += 1;
-                        if (newlySavedCandidates.has(rec)) runTracker.updateSummary({ autoAddAttempted: runTracker.getRun().summary.autoAddAttempted + 1 });
+                        runTracker.updateSummary({ autoAddAttempted: runTracker.getRun().summary.autoAddAttempted + 1 });
                         const res = await addSeriesToSonarr(rec.tvdbId);
                         if (res.success) {
                             sonarrHealth.recordSuccess('Sonarr operation succeeded');

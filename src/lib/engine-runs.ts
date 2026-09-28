@@ -82,6 +82,7 @@ export function updateEngineRun(id: string, patch: {
 }): EngineRun {
     const current = getEngineRun(id);
     if (!current) throw new Error(`Engine run ${id} was not found`);
+    if (current.status !== 'running') return current;
     const updatedAt = freshDatabaseTimestamp(current.updatedAt);
     const summary = patch.summary ? { ...current.summary, ...patch.summary } : current.summary;
     getDatabase().prepare(`UPDATE engine_runs SET status = ?, completed_at = ?, current_stage = ?,
@@ -131,6 +132,12 @@ export function recoverInterruptedEngineRuns(processStartedAt: string): number {
             stage.durationMs = stage.startedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(stage.startedAt)) : undefined;
             stage.failureCount += 1;
             if (!stage.failures.includes('The application restarted before this run completed.')) stage.failures.push('The application restarted before this run completed.');
+        }
+        for (const pendingStage of run.stages) {
+            if (pendingStage.status !== 'pending') continue;
+            pendingStage.status = 'skipped';
+            pendingStage.skipReason = 'Run stopped because the application restarted';
+            pendingStage.completedAt = completedAt;
         }
         updateEngineRun(run.id, { status: 'interrupted', completedAt, summary: run.summary, stages: run.stages,
             errorMessage: 'The application restarted before this run completed.' });

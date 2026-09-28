@@ -20,6 +20,19 @@ describe('ServiceAttemptAccumulator', () => {
         new ServiceAttemptAccumulator('ai', 'engine', writer).flush();
         expect(writer).not.toHaveBeenCalled();
     });
+
+    it('allows a newer healthy observation to supersede an older run failure', () => {
+        const observations: Array<{ state: string; message: string }> = [];
+        const writer = vi.fn(observation => observations.push(observation));
+        const failed = new ServiceAttemptAccumulator('radarr', 'engine', writer, () => '2026-09-29T01:00:00.000Z');
+        failed.recordFailure('Radarr library failed');
+        failed.flush();
+        const recovered = new ServiceAttemptAccumulator('radarr', 'connection_test', writer, () => '2026-09-29T02:00:00.000Z');
+        recovered.recordSuccess('Connection test succeeded');
+        recovered.flush();
+        expect(observations.map(item => item.state)).toEqual(['failed', 'healthy']);
+        expect(observations.at(-1)?.message).toBe('Connection test succeeded');
+    });
 });
 
 describe('changedHealthServices', () => {

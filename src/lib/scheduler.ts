@@ -17,6 +17,28 @@ export interface SchedulerSnapshot {
     active: boolean;
 }
 
+export type ScheduledRunResult = { started: true } | { started: false; reason: 'already_running' | 'failed' };
+
+export async function runScheduledRecommendation(): Promise<ScheduledRunResult> {
+    if (getIsRunning()) {
+        addLog({ level: 'WARN', message: 'Automated schedule skipped because engine is already running', source: 'scheduler' });
+        return { started: false, reason: 'already_running' };
+    }
+    addLog({ level: 'INFO', message: 'Automated schedule triggered recommendation engine', source: 'scheduler' });
+    try {
+        await runRecommendationEngine(undefined, 'scheduled');
+        return { started: true };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Scheduled recommendation run failed';
+        if (/engine run is already running|recommendation engine is already running/i.test(message)) {
+            addLog({ level: 'WARN', message: 'Automated schedule skipped because engine is already running', source: 'scheduler' });
+            return { started: false, reason: 'already_running' };
+        }
+        addLog({ level: 'ERROR', message: `Automated recommendation run failed: ${message}`, source: 'scheduler' });
+        return { started: false, reason: 'failed' };
+    }
+}
+
 function getSchedulerState(): SchedulerState {
     const globalState = globalThis as typeof globalThis & {
         __recomendarrScheduler?: SchedulerState;
@@ -64,15 +86,7 @@ export function syncRecommendationScheduler() {
         return;
     }
 
-    state.task = cron.schedule(scheduler.cronSchedule, async () => {
-        if (getIsRunning()) {
-            addLog({ level: 'WARN', message: 'Automated schedule skipped because engine is already running', source: 'scheduler' });
-            return;
-        }
-
-        addLog({ level: 'INFO', message: 'Automated schedule triggered recommendation engine', source: 'scheduler' });
-        await runRecommendationEngine(undefined, 'scheduled');
-    });
+    state.task = cron.schedule(scheduler.cronSchedule, () => runScheduledRecommendation());
 
     addLog({ level: 'INFO', message: `Scheduler registered with cron ${scheduler.cronSchedule}`, source: 'scheduler' });
 }

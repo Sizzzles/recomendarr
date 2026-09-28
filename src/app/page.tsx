@@ -23,7 +23,7 @@ import type { LogEntry, Recommendation } from '@/lib/types';
 import type { RecommendationStatus } from '@/lib/types';
 import { beginOptimisticTransition, matchesQueueSearch, reconcileRecommendation } from '@/components/app/queue-optimistic';
 import { ServiceHealthStrip } from '@/components/app/service-health-strip';
-import { getPollingIntervals } from '@/components/app/engine-observability-model';
+import { clearActiveRunAfterStatusFailure, getPollingIntervals } from '@/components/app/engine-observability-model';
 
 const RECOMMENDATION_PAGE_SIZE = 24;
 const EMPTY_COUNTS: Counts = { pending: 0, approved: 0, rejected: 0, added: 0, not_now: 0, watched: 0, total: 0 };
@@ -259,7 +259,8 @@ function HomeContent() {
             setIsRunning(Boolean(data.activeRun));
             setObservability(prev => ({ ...prev, activeRun: data.activeRun, latestRun: data.latestRun, lastSuccessfulRun: data.lastSuccessfulRun }));
         } catch {
-            // silent fetch failure
+            setIsRunning(false);
+            setObservability(clearActiveRunAfterStatusFailure);
         } finally { observabilityRequests.current.status = false; }
     }, []);
 

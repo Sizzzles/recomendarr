@@ -153,4 +153,23 @@ describe('service health repository', () => {
         health.clearServiceHealth('tmdb');
         expect(health.getServiceHealthObservations()).toEqual([]);
     });
+
+    it('keeps a run failure until a newer health observation supersedes it', async () => {
+        const { health } = await loadModules();
+        health.recordServiceHealth({
+            service: 'radarr', state: 'failed', checkedAt: '2026-09-29T01:00:00.000Z',
+            message: 'Could not load Radarr library', source: 'engine',
+        });
+        expect(health.getServiceHealthObservations()).toEqual([
+            expect.objectContaining({ service: 'radarr', state: 'failed', source: 'engine' }),
+        ]);
+
+        health.recordServiceHealth({
+            service: 'radarr', state: 'healthy', checkedAt: '2026-09-29T02:00:00.000Z',
+            message: 'Connection test succeeded', source: 'connection_test',
+        });
+        expect(health.getServiceHealthObservations()).toEqual([
+            expect.objectContaining({ service: 'radarr', state: 'healthy', source: 'connection_test' }),
+        ]);
+    });
 });

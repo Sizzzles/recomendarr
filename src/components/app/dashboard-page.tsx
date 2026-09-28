@@ -8,7 +8,7 @@ import { buildFeedbackImpactSummary, formatDateTime, formatRelativeDate } from '
 import { ServiceHealthStrip } from './service-health-strip';
 import { EngineRunStatus } from './engine-run-status';
 import { EngineRunHistory } from './engine-run-history';
-import { formatElapsed, prominentRunIssue } from './engine-observability-model';
+import { formatElapsed, primaryRunIssueStage, prominentRunIssue, prominentRunIssueHeading } from './engine-observability-model';
 
 const GENRES = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western'];
 const PROVIDERS = [
@@ -42,7 +42,7 @@ export function DashboardPage({
     observability,
 }: DashboardPageProps) {
     const prominentIssue = prominentRunIssue(observability.latestRun, observability.lastSuccessfulRun);
-    const failedStage = prominentIssue?.stages.find(stage => stage.status === 'failed');
+    const failedStage = prominentIssue ? primaryRunIssueStage(prominentIssue) : undefined;
     const toggleGenre = (genre: string) => {
         setEngineFilters((prev) => ({
             ...prev,
@@ -89,7 +89,7 @@ export function DashboardPage({
             <ServiceHealthStrip services={observability.services} rich />
             {observability.activeRun && <EngineRunStatus run={observability.activeRun} />}
             {prominentIssue && <section className={`engine-run-alert ${prominentIssue.status}`} role="alert">
-                <div><strong>{prominentIssue.status === 'failed' ? 'Engine run failed' : 'Engine run completed partially'}</strong>
+                <div><strong>{prominentRunIssueHeading(prominentIssue.status)}</strong>
                     <p>{failedStage ? `${failedStage.name.replaceAll('_', ' ')}: ` : ''}{prominentIssue.errorMessage || 'One or more attempted operations did not complete.'}</p>
                     <a href={`#run-${prominentIssue.id}`}>View run details</a></div>
                 <p className="run-id">Run ID: <code>{prominentIssue.id}</code> · {formatDateTime(prominentIssue.startedAt)}</p>

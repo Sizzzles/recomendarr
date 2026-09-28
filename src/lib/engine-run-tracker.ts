@@ -5,6 +5,13 @@ import type {
 } from './engine-observability-types';
 
 type CandidateDisposition = 'duplicate' | 'existing_or_watched' | 'rejected_title' | 'user_filter' | 'saved';
+type EngineRunUpdate = typeof updateEngineRun;
+interface CoreFailure {
+    stage: EngineStageName;
+    message: string;
+    alreadyCounted: boolean;
+    stoppedReason: string;
+}
 
 function publicError(value: string): string {
     return redactDiagnosticText(value)
@@ -19,13 +26,17 @@ function stageDuration(stage: EngineRunStage): number | undefined {
 
 export class EngineRunTracker {
     private run: EngineRun;
+    private readonly persist: EngineRunUpdate;
 
-    constructor(run: EngineRun) { this.run = run; }
+    constructor(run: EngineRun, persist: EngineRunUpdate = updateEngineRun) {
+        this.run = run;
+        this.persist = persist;
+    }
 
     getRun(): EngineRun { return this.run; }
 
     private save(): EngineRun {
-        this.run = updateEngineRun(this.run.id, {
+        this.run = this.persist(this.run.id, {
             status: this.run.status,
             completedAt: this.run.completedAt,
             currentStage: this.run.currentStage,
@@ -78,7 +89,10 @@ export class EngineRunTracker {
             stage.failureCount += 1;
             this.run.summary.errorCount += 1;
             const message = publicError(error || 'Operation failed');
-            if (!stage.failures.includes(message) && stage.failures.length < 10) stage.failures.push(message);
+            if (!stage.failures.includes(message)) {
+                if (stage.failures.length < 10) stage.failures.push(message);
+                else stage.failures[stage.failures.length - 1] = message;
+            }
             this.run.errorMessage = message;
         }
         return this.save();
@@ -121,24 +135,59 @@ export class EngineRunTracker {
             summary.userFilterExcluded + summary.recommendationsSaved;
     }
 
-    finish(input: { coreCompleted: boolean; fatalError?: string; completedAt?: string }): EngineRun {
-        if (input.fatalError) {
-            const message = publicError(input.fatalError);
-            if (!this.run.errorMessage) this.run.errorMessage = message;
-            this.run.summary.errorCount += 1;
-            const stage = this.stage(this.run.currentStage);
-            stage.failureCount += 1;
-            stage.attemptCount += 1;
-            stage.applicableCount += 1;
-            if (!stage.failures.includes(message) && stage.failures.length < 10) stage.failures.push(message);
+    finish(input: { coreCompleted: boolean; fatalError?: string; coreFailure?: CoreFailure; completedAt?: string }): EngineRun {
+        if (this.run.status !== 'running') return this.run;
+
+        // Finalize a copy so a failed database write leaves the live tracker retryable.
+        const next = structuredClone(this.run);
+        const completedAt = input.completedAt || new Date().toISOString();
+        const coreFailure = input.coreFailure || (input.fatalError ? {
+            stage: next.currentStage,
+            message: input.fatalError,
+            alreadyCounted: false,
+            stoppedReason: `Run stopped after ${next.currentStage.replaceAll('_', ' ')} failed`,
+        } : undefined);
+        if (coreFailure) {
+            const message = publicError(coreFailure.message);
+            next.errorMessage = message;
+            const stage = next.stages.find(item => item.name === coreFailure.stage);
+            if (!stage) throw new Error(`Unknown engine stage: ${coreFailure.stage}`);
+            if (!coreFailure.alreadyCounted) {
+                next.summary.errorCount += 1;
+                stage.failureCount += 1;
+                stage.attemptCount += 1;
+                stage.applicableCount += 1;
+            }
+            if (!stage.failures.includes(message)) {
+                if (stage.failures.length < 10) stage.failures.push(message);
+                else stage.failures[stage.failures.length - 1] = message;
+            }
             stage.status = 'failed';
-            stage.completedAt = input.completedAt || new Date().toISOString();
+            stage.completedAt ||= completedAt;
             stage.durationMs = stageDuration(stage);
+        } else {
+            next.errorMessage = next.stages.find(stage => stage.failures.length > 0)?.failures[0] || null;
         }
-        this.run.summary.candidatesUnprocessed = Math.max(0, this.run.summary.candidatesConsidered - this.classifiedCandidates());
-        this.run.status = !input.coreCompleted ? 'failed' : this.run.summary.errorCount > 0 ? 'partial' : 'succeeded';
-        this.run.completedAt = input.completedAt || new Date().toISOString();
-        return this.save();
+        if (!input.coreCompleted) {
+            const reason = coreFailure?.stoppedReason || 'Run stopped after a critical engine failure';
+            for (const stage of next.stages) {
+                if (stage.status !== 'pending') continue;
+                stage.status = 'skipped';
+                stage.skipReason = reason;
+                stage.completedAt = completedAt;
+            }
+        }
+        const classified = next.summary.duplicatesRemoved + next.summary.existingOrWatchedExcluded +
+            next.summary.rejectedTitleExcluded + next.summary.userFilterExcluded + next.summary.recommendationsSaved;
+        next.summary.candidatesUnprocessed = Math.max(0, next.summary.candidatesConsidered - classified);
+        next.status = !input.coreCompleted ? 'failed' : next.summary.errorCount > 0 ? 'partial' : 'succeeded';
+        next.completedAt = completedAt;
+        const persisted = this.persist(next.id, {
+            status: next.status, completedAt: next.completedAt, currentStage: next.currentStage,
+            summary: next.summary, stages: next.stages, errorMessage: next.errorMessage,
+        });
+        this.run = persisted;
+        return this.run;
     }
 }
 
