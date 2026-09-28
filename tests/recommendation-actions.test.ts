@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ databasePath: '', connections: [] as import('better-sqlite3').Database[] }));
 vi.mock('../src/lib/config', () => ({ config: { database: { get path() { return state.databasePath; } } } }));
 vi.mock('better-sqlite3', async (importOriginal) => {
-    const { default: Sqlite } = await importOriginal<typeof import('better-sqlite3')>();
+    type SqliteConstructor = new (filename: string) => import('better-sqlite3').Database;
+    const { default: Sqlite } = await importOriginal<{ default: SqliteConstructor }>();
     return { default: class extends Sqlite { constructor(filename: string) { super(filename); state.connections.push(this); } } };
 });
 
@@ -20,6 +21,12 @@ async function setup() {
     const actions = await import('../src/lib/recommendation-actions');
     for (const [id, title] of [['one', 'One'], ['two', 'Two']]) database.addRecommendation({ id, title, mediaType: 'movie', source: 'tmdb', status: 'pending', genres: ['Drama'] });
     return { database, actions, db: database.getDatabase() };
+}
+
+async function setupIdentifiedRecommendation() {
+    const result = await setup();
+    result.database.addRecommendation({ id: 'identified', title: 'Identified', mediaType: 'movie', tmdbId: 42, imdbId: 'tt0042', source: 'tmdb', status: 'pending' });
+    return result;
 }
 
 describe('shared recommendation actions', () => {
@@ -64,15 +71,51 @@ describe('shared recommendation actions', () => {
         expect(() => actions.restoreRecommendationState('one', previous, first.updatedAt!)).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT' }));
     });
 
+    it('removes a manual watched record by stable identifier when Undo restores a non-watched state', async () => {
+        const { actions, db } = await setupIdentifiedRecommendation();
+        const previous = actions.getRecommendationActionState('identified');
+        const watched = actions.applyRecommendationAction('identified', 'watched');
+        db.prepare("UPDATE watched_media_state SET normalized_title = 'renamed elsewhere' WHERE tmdb_id = 42").run();
+
+        const restored = actions.restoreRecommendationState('identified', previous, watched.updatedAt!);
+
+        expect(restored.status).toBe('pending');
+        expect(db.prepare("SELECT COUNT(*) AS count FROM watched_media_state WHERE source = 'manual' AND tmdb_id = 42").get())
+            .toEqual({ count: 0 });
+    });
+
+    it('removes manual watched persistence on Return to queue but preserves media-server history', async () => {
+        const { actions, database, db } = await setupIdentifiedRecommendation();
+        actions.applyRecommendationAction('identified', 'watched');
+        actions.applyRecommendationAction('identified', 'pending');
+        expect(db.prepare("SELECT COUNT(*) AS count FROM watched_media_state WHERE tmdb_id = 42").get()).toEqual({ count: 0 });
+
+        database.syncWatchedMediaState([{ title: 'Identified', mediaType: 'movie', tmdbId: 42, lastPlayedDate: '2026-09-20T10:00:00.000Z' }]);
+        actions.applyRecommendationAction('identified', 'pending');
+
+        expect(db.prepare("SELECT source FROM watched_media_state WHERE tmdb_id = 42").get()).toEqual({ source: 'media_server' });
+    });
+
+    it('preserves media-server provenance when Undo restores a watched recommendation', async () => {
+        const { actions, database, db } = await setupIdentifiedRecommendation();
+        database.syncWatchedMediaState([{ title: 'Identified', mediaType: 'movie', tmdbId: 42, lastPlayedDate: '2026-09-20T10:00:00.000Z' }]);
+        const previous = actions.getRecommendationActionState('identified');
+        const pending = actions.applyRecommendationAction('identified', 'pending');
+
+        actions.restoreRecommendationState('identified', previous, pending.updatedAt!);
+
+        expect(db.prepare("SELECT source FROM watched_media_state WHERE tmdb_id = 42").get()).toEqual({ source: 'media_server' });
+    });
+
     it('restores a batch atomically only when every expected version matches', async () => {
         const { actions } = await setup();
         const previous = [actions.getRecommendationActionState('one'), actions.getRecommendationActionState('two')];
         const current = actions.applyBulkRecommendationAction(['one', 'two'], 'not_now');
-        const restored = actions.restoreBulkRecommendationStates(previous.map((item: { id?: string }, index: number) => ({ id: item.id!, previous: item, expectedUpdatedAt: current[index].updatedAt! })));
+        const restored = actions.restoreBulkRecommendationStates(previous.map((item, index) => ({ id: item.id!, previous: item, expectedUpdatedAt: current[index].updatedAt! })));
         expect(restored.map((item: { status: string }) => item.status)).toEqual(['pending', 'pending']);
         const moved = actions.applyBulkRecommendationAction(['one', 'two'], 'not_now');
         actions.applyRecommendationAction('two', 'watched');
-        expect(() => actions.restoreBulkRecommendationStates(previous.map((item: { id?: string }, index: number) => ({ id: item.id!, previous: item, expectedUpdatedAt: moved[index].updatedAt! })))).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT' }));
+        expect(() => actions.restoreBulkRecommendationStates(previous.map((item, index) => ({ id: item.id!, previous: item, expectedUpdatedAt: moved[index].updatedAt! })))).toThrowError(expect.objectContaining({ code: 'VERSION_CONFLICT' }));
         expect(actions.getRecommendationActionState('one').status).toBe('not_now');
     });
 

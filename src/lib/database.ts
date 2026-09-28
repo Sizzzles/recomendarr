@@ -6,6 +6,14 @@ import type { FeedbackProfile, FeedbackReason, Recommendation, LogEntry, MediaTy
 import type { RecommendationQuery } from './recommendation-query';
 
 let db: Database.Database | null = null;
+let lastDatabaseTimestamp = 0;
+
+export function freshDatabaseTimestamp(after?: string): string {
+    const afterTimestamp = after ? Date.parse(after) : 0;
+    const value = Math.max(Date.now(), lastDatabaseTimestamp + 1, Number.isFinite(afterTimestamp) ? afterTimestamp + 1 : 0);
+    lastDatabaseTimestamp = value;
+    return new Date(value).toISOString();
+}
 
 export function getDatabase(): Database.Database {
     if (db) {
@@ -310,6 +318,29 @@ function recommendationQueryParts(query: RecommendationQuery) {
     return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
 }
 
+export function removeManualWatchedMediaState(
+    recommendation: Pick<Recommendation, 'mediaType' | 'tmdbId' | 'tvdbId' | 'imdbId' | 'title'>,
+    database: Database.Database = getDatabase(),
+): void {
+    database.prepare(`
+        DELETE FROM watched_media_state
+        WHERE source = 'manual'
+          AND media_type = ?
+          AND (
+            (? IS NOT NULL AND tmdb_id = ?)
+            OR (? IS NOT NULL AND tvdb_id = ?)
+            OR (? IS NOT NULL AND lower(imdb_id) = lower(?))
+            OR normalized_title = lower(trim(?))
+          )
+    `).run(
+        recommendation.mediaType,
+        recommendation.tmdbId ?? null, recommendation.tmdbId ?? null,
+        recommendation.tvdbId ?? null, recommendation.tvdbId ?? null,
+        recommendation.imdbId ?? null, recommendation.imdbId ?? null,
+        recommendation.title,
+    );
+}
+
 const recommendationOrder: Record<RecommendationQuery['sort'], string> = {
     newest: 'created_at DESC, id ASC',
     oldest: 'created_at ASC, id ASC',
@@ -349,39 +380,27 @@ export function updateRecommendationStatus(
     feedback?: { reason?: FeedbackReason; notes?: string }
 ): boolean {
     const db = getDatabase();
+    const existing = getRecommendationById(id);
+    const updatedAt = freshDatabaseTimestamp(existing?.updatedAt);
     let result: Database.RunResult;
 
     if (status === 'rejected') {
         result = db.prepare(
-            "UPDATE recommendations SET status = ?, snoozed_until = NULL, feedback_reason = ?, feedback_notes = ?, feedback_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
-        ).run(status, feedback?.reason || null, feedback?.notes || null, id);
+            "UPDATE recommendations SET status = ?, snoozed_until = NULL, feedback_reason = ?, feedback_notes = ?, feedback_at = ?, updated_at = ? WHERE id = ?"
+        ).run(status, feedback?.reason || null, feedback?.notes || null, updatedAt, updatedAt, id);
     } else if (status === 'pending') {
         result = db.prepare(
-            "UPDATE recommendations SET status = ?, snoozed_until = NULL, feedback_reason = NULL, feedback_notes = NULL, feedback_at = NULL, updated_at = datetime('now') WHERE id = ?"
-        ).run(status, id);
-        db.prepare(`
-            DELETE FROM watched_media_state
-            WHERE source = 'manual'
-              AND EXISTS (
-                SELECT 1 FROM recommendations recommendation
-                WHERE recommendation.id = ?
-                  AND recommendation.media_type = watched_media_state.media_type
-                  AND (
-                    (recommendation.tmdb_id IS NOT NULL AND recommendation.tmdb_id = watched_media_state.tmdb_id)
-                    OR (recommendation.tvdb_id IS NOT NULL AND recommendation.tvdb_id = watched_media_state.tvdb_id)
-                    OR (recommendation.imdb_id IS NOT NULL AND lower(recommendation.imdb_id) = lower(watched_media_state.imdb_id))
-                    OR lower(trim(recommendation.title)) = watched_media_state.normalized_title
-                  )
-              )
-        `).run(id);
+            "UPDATE recommendations SET status = ?, snoozed_until = NULL, feedback_reason = NULL, feedback_notes = NULL, feedback_at = NULL, updated_at = ? WHERE id = ?"
+        ).run(status, updatedAt, id);
+        if (existing) removeManualWatchedMediaState(existing, db);
     } else if (status === 'watched') {
         result = db.prepare(
-            "UPDATE recommendations SET status = ?, snoozed_until = NULL, feedback_reason = NULL, feedback_notes = NULL, feedback_at = NULL, updated_at = datetime('now') WHERE id = ?"
-        ).run(status, id);
+            "UPDATE recommendations SET status = ?, snoozed_until = NULL, feedback_reason = NULL, feedback_notes = NULL, feedback_at = NULL, updated_at = ? WHERE id = ?"
+        ).run(status, updatedAt, id);
     } else {
         result = db.prepare(
-            "UPDATE recommendations SET status = ?, updated_at = datetime('now') WHERE id = ?"
-        ).run(status, id);
+            "UPDATE recommendations SET status = ?, updated_at = ? WHERE id = ?"
+        ).run(status, updatedAt, id);
     }
 
     if (status === 'watched' && result.changes > 0) {
@@ -410,11 +429,15 @@ export function snoozeRecommendation(id: string, days = 7): boolean {
 
 export function syncWatchedMediaState(items: WatchedItem[], source: 'media_server' | 'manual' = 'media_server'): void {
     const db = getDatabase();
+    const findExisting = db.prepare(`
+        SELECT title, normalized_title, tmdb_id, tvdb_id, imdb_id, last_played, play_count, source, updated_at
+        FROM watched_media_state WHERE id = ?
+    `);
     const upsert = db.prepare(`
         INSERT INTO watched_media_state (
           id, title, normalized_title, media_type, tmdb_id, tvdb_id, imdb_id,
           last_played, play_count, source, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           title = excluded.title,
           normalized_title = excluded.normalized_title,
@@ -423,38 +446,57 @@ export function syncWatchedMediaState(items: WatchedItem[], source: 'media_serve
           imdb_id = excluded.imdb_id,
           last_played = excluded.last_played,
           play_count = excluded.play_count,
-          source = excluded.source,
-          updated_at = datetime('now')
+          source = CASE
+            WHEN watched_media_state.source = 'media_server' OR excluded.source = 'media_server' THEN 'media_server'
+            ELSE 'manual'
+          END,
+          updated_at = excluded.updated_at
+    `);
+    const markMatchingRecommendationsWatched = db.prepare(`
+        UPDATE recommendations
+        SET status = 'watched',
+            snoozed_until = NULL,
+            feedback_reason = NULL,
+            feedback_notes = NULL,
+            feedback_at = NULL,
+            updated_at = ?
+        WHERE media_type = ?
+          AND (
+            (? IS NOT NULL AND tmdb_id = ?)
+            OR (? IS NOT NULL AND tvdb_id = ?)
+            OR (? IS NOT NULL AND lower(imdb_id) = lower(?))
+            OR lower(trim(title)) = ?
+          )
     `);
 
     const transaction = db.transaction((watchedItems: WatchedItem[]) => {
         for (const item of watchedItems) {
+            const id = watchedStateId(item);
+            const existing = findExisting.get(id) as {
+                last_played: string | null;
+                play_count: number | null;
+                updated_at: string;
+            } | undefined;
+            const lastPlayed = item.lastPlayedDate || null;
+            const playCount = item.playCount ?? null;
+            const isNewWatchEvent = !existing || existing.last_played !== lastPlayed || existing.play_count !== playCount;
+            const updatedAt = isNewWatchEvent ? freshDatabaseTimestamp(existing?.updated_at) : existing.updated_at;
             upsert.run(
-                watchedStateId(item), item.title, normalizeTitle(item.title), item.mediaType,
+                id, item.title, normalizeTitle(item.title), item.mediaType,
                 item.tmdbId || null, item.tvdbId || null, item.imdbId || null,
-                item.lastPlayedDate || null, item.playCount || null, source
+                lastPlayed, playCount, source, updatedAt,
             );
+            if (source === 'media_server' && isNewWatchEvent) {
+                const recommendationUpdatedAt = freshDatabaseTimestamp(updatedAt);
+                markMatchingRecommendationsWatched.run(
+                    recommendationUpdatedAt, item.mediaType,
+                    item.tmdbId ?? null, item.tmdbId ?? null,
+                    item.tvdbId ?? null, item.tvdbId ?? null,
+                    item.imdbId ?? null, item.imdbId ?? null,
+                    normalizeTitle(item.title),
+                );
+            }
         }
-
-        db.prepare(`
-            UPDATE recommendations
-            SET status = 'watched',
-                snoozed_until = NULL,
-                feedback_reason = NULL,
-                feedback_notes = NULL,
-                feedback_at = NULL,
-                updated_at = datetime('now')
-            WHERE EXISTS (
-                SELECT 1 FROM watched_media_state watched
-                WHERE watched.media_type = recommendations.media_type
-                  AND (
-                    (recommendations.tmdb_id IS NOT NULL AND watched.tmdb_id = recommendations.tmdb_id)
-                    OR (recommendations.tvdb_id IS NOT NULL AND watched.tvdb_id = recommendations.tvdb_id)
-                    OR (recommendations.imdb_id IS NOT NULL AND lower(watched.imdb_id) = lower(recommendations.imdb_id))
-                    OR watched.normalized_title = lower(trim(recommendations.title))
-                  )
-            )
-        `).run();
     });
     transaction(items);
 }

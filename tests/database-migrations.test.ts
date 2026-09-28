@@ -16,7 +16,8 @@ vi.mock('../src/lib/config', () => ({
 
 // Keep real SQLite behavior; track connections so even failed startup is cleaned up.
 vi.mock('better-sqlite3', async (importOriginal) => {
-    const { default: Sqlite } = await importOriginal<typeof import('better-sqlite3')>();
+    type SqliteConstructor = new (filename: string) => import('better-sqlite3').Database;
+    const { default: Sqlite } = await importOriginal<{ default: SqliteConstructor }>();
     return {
         default: class extends Sqlite {
             constructor(filename: string) {

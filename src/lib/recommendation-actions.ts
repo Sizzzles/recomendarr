@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { getDatabase, getRecommendationById, syncWatchedMediaState } from './database';
+import { freshDatabaseTimestamp, getDatabase, getRecommendationById, removeManualWatchedMediaState, syncWatchedMediaState } from './database';
 import type { FeedbackReason, Recommendation } from './types';
 
 export type RecommendationAction = 'not_now' | 'reject' | 'watched' | 'pending';
@@ -9,13 +9,6 @@ export class RecommendationActionError extends Error {
     constructor(message: string, public code: 'NOT_FOUND' | 'INVALID_BATCH' | 'INELIGIBLE' | 'VERSION_CONFLICT') { super(message); }
 }
 
-let lastTimestamp = 0;
-function freshTimestamp() {
-    const value = Math.max(Date.now(), lastTimestamp + 1);
-    lastTimestamp = value;
-    return new Date(value).toISOString();
-}
-
 function requireRecommendation(id: string) {
     const recommendation = getRecommendationById(id);
     if (!recommendation) throw new RecommendationActionError(`Recommendation ${id} was not found`, 'NOT_FOUND');
@@ -23,8 +16,8 @@ function requireRecommendation(id: string) {
 }
 
 function applyWithDatabase(db: Database.Database, id: string, action: RecommendationAction, options: RecommendationActionOptions = {}) {
-    requireRecommendation(id);
-    const updatedAt = freshTimestamp();
+    const existing = requireRecommendation(id);
+    const updatedAt = freshDatabaseTimestamp(existing.updatedAt);
     let result: Database.RunResult;
     if (action === 'not_now') {
         const days = Math.max(1, Math.min(365, Math.floor(options.days ?? 7)));
@@ -42,15 +35,11 @@ function applyWithDatabase(db: Database.Database, id: string, action: Recommenda
     const updated = requireRecommendation(id);
     if (action === 'watched') {
         syncWatchedMediaState([updated], 'manual');
-        db.prepare('UPDATE recommendations SET updated_at = ? WHERE id = ?').run(freshTimestamp(), id);
+        db.prepare('UPDATE recommendations SET updated_at = ? WHERE id = ?').run(freshDatabaseTimestamp(updated.updatedAt), id);
         return requireRecommendation(id);
     }
     if (action === 'pending') {
-        db.prepare(`DELETE FROM watched_media_state WHERE source='manual' AND media_type=? AND
-            ((? IS NOT NULL AND tmdb_id=?) OR (? IS NOT NULL AND tvdb_id=?) OR
-             (? IS NOT NULL AND lower(imdb_id)=lower(?)) OR normalized_title=lower(trim(?)))`)
-            .run(updated.mediaType, updated.tmdbId || null, updated.tmdbId || null, updated.tvdbId || null, updated.tvdbId || null,
-                updated.imdbId || null, updated.imdbId || null, updated.title);
+        removeManualWatchedMediaState(updated, db);
     }
     return updated;
 }
@@ -83,7 +72,7 @@ export function restoreRecommendationState(id: string, previous: Recommendation,
 }
 
 function restoreWithDatabase(db: Database.Database, id: string, previous: Recommendation, expectedUpdatedAt: string) {
-    const updatedAt = freshTimestamp();
+    const updatedAt = freshDatabaseTimestamp(expectedUpdatedAt);
     const result = db.prepare(`UPDATE recommendations SET status=?, snoozed_until=?, feedback_reason=?,
         feedback_notes=?, feedback_at=?, updated_at=? WHERE id=? AND updated_at=?`).run(
         previous.status, previous.snoozedUntil || null, previous.feedbackReason || null,
@@ -93,9 +82,9 @@ function restoreWithDatabase(db: Database.Database, id: string, previous: Recomm
     const restored = requireRecommendation(id);
     if (restored.status === 'watched') {
         syncWatchedMediaState([restored], 'manual');
-        db.prepare('UPDATE recommendations SET updated_at = ? WHERE id = ?').run(freshTimestamp(), id);
+        db.prepare('UPDATE recommendations SET updated_at = ? WHERE id = ?').run(freshDatabaseTimestamp(restored.updatedAt), id);
     }
-    else db.prepare("DELETE FROM watched_media_state WHERE source='manual' AND media_type=? AND normalized_title=lower(trim(?))").run(restored.mediaType, restored.title);
+    else removeManualWatchedMediaState(restored, db);
     return requireRecommendation(id);
 }
 

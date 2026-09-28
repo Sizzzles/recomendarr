@@ -41,7 +41,7 @@ type OperationState<T = never> =
     | { status: 'error'; message: string }
     | ({ status: 'ready' } & T)
     | { status: 'copied' }
-    | { status: 'downloaded'; filename: string };
+    | { status: 'download-started'; filename: string };
 
 export interface SettingsDiagnosticsState {
     diagnostics: OperationState<{ value: DiagnosticsResponse }>;
@@ -58,7 +58,7 @@ export type SettingsDiagnosticsAction =
     | { type: 'copy_failed'; message: string }
     | { type: 'copy_reset' }
     | { type: 'backup_started' }
-    | { type: 'backup_succeeded'; filename: string }
+    | { type: 'backup_download_started'; filename: string }
     | { type: 'backup_failed'; message: string }
     | { type: 'backup_reset' };
 
@@ -81,7 +81,7 @@ export function diagnosticsReducer(
         case 'copy_failed': return { ...state, copy: { status: 'error', message: action.message } };
         case 'copy_reset': return { ...state, copy: { status: 'idle' } };
         case 'backup_started': return { ...state, backup: { status: 'preparing' } };
-        case 'backup_succeeded': return { ...state, backup: { status: 'downloaded', filename: action.filename } };
+        case 'backup_download_started': return { ...state, backup: { status: 'download-started', filename: action.filename } };
         case 'backup_failed': return { ...state, backup: { status: 'error', message: action.message } };
         case 'backup_reset': return { ...state, backup: { status: 'idle' } };
     }
@@ -143,6 +143,7 @@ interface BackupDownloadDependencies {
     fetchBackup: () => Promise<Response>;
     createObjectUrl: (blob: Blob) => string;
     revokeObjectUrl: (url: string) => void;
+    scheduleUrlRevocation?: (revoke: () => void) => void;
     triggerDownload: (url: string, filename: string) => void;
     now?: () => Date;
 }
@@ -155,8 +156,12 @@ export async function downloadDatabaseBackup(dependencies: BackupDownloadDepende
     const objectUrl = dependencies.createObjectUrl(blob);
     try {
         dependencies.triggerDownload(objectUrl, filename);
+        const revoke = () => dependencies.revokeObjectUrl(objectUrl);
+        if (dependencies.scheduleUrlRevocation) dependencies.scheduleUrlRevocation(revoke);
+        else setTimeout(revoke, 1000);
         return { filename };
-    } finally {
+    } catch (error) {
         dependencies.revokeObjectUrl(objectUrl);
+        throw error;
     }
 }

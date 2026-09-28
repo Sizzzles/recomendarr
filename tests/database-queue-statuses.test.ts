@@ -15,7 +15,8 @@ vi.mock('../src/lib/config', () => ({
 }));
 
 vi.mock('better-sqlite3', async (importOriginal) => {
-    const { default: Sqlite } = await importOriginal<typeof import('better-sqlite3')>();
+    type SqliteConstructor = new (filename: string) => import('better-sqlite3').Database;
+    const { default: Sqlite } = await importOriginal<{ default: SqliteConstructor }>();
     return {
         default: class extends Sqlite {
             constructor(filename: string) {
@@ -170,6 +171,75 @@ describe('Watched queue and learning', () => {
             feedbackReason: null,
         });
         expect(database.getFeedbackProfile().rejectedTitles).not.toContain('the matrix');
+    });
+
+    it('persists watched-state rows without letting an unchanged repeated sync overwrite a newer user decision', async () => {
+        const { database, db } = await startDatabase();
+        database.addRecommendation(recommendation('rec-502', 'Arrival'));
+        const watched: WatchedItem[] = [{
+            title: 'Arrival',
+            mediaType: 'movie',
+            tmdbId: 502,
+            lastPlayedDate: '2026-09-20T10:00:00.000Z',
+            playCount: 1,
+        }];
+
+        database.syncWatchedMediaState(watched);
+        expect(database.getRecommendationById('rec-502')?.status).toBe('watched');
+        expect(database.updateRecommendationStatus('rec-502', 'pending')).toBe(true);
+
+        database.syncWatchedMediaState(watched);
+
+        expect(database.getRecommendationById('rec-502')?.status).toBe('pending');
+        expect(db.prepare("SELECT source, play_count FROM watched_media_state WHERE tmdb_id = 502").get())
+            .toEqual({ source: 'media_server', play_count: 1 });
+    });
+
+    it('applies a later media-server watch event after a user returned an item to queue', async () => {
+        const { database } = await startDatabase();
+        database.addRecommendation(recommendation('rec-503', 'Heat'));
+        database.syncWatchedMediaState([{ title: 'Heat', mediaType: 'movie', tmdbId: 503, lastPlayedDate: '2026-09-20T10:00:00.000Z', playCount: 1 }]);
+        database.updateRecommendationStatus('rec-503', 'pending');
+
+        database.syncWatchedMediaState([{ title: 'Heat', mediaType: 'movie', tmdbId: 503, lastPlayedDate: '2026-09-28T10:00:00.000Z', playCount: 2 }]);
+
+        expect(database.getRecommendationById('rec-503')?.status).toBe('watched');
+    });
+
+    it.each([
+        ['rejected', { reason: 'not_interested' as const }],
+        ['not_now', undefined],
+    ] as const)('does not overwrite a newer explicit %s decision during unchanged synchronization', async (action, feedback) => {
+        const { database } = await startDatabase();
+        database.addRecommendation(recommendation('rec-505', 'Solaris'));
+        const watched: WatchedItem[] = [{ title: 'Solaris', mediaType: 'movie', tmdbId: 505, lastPlayedDate: '2026-09-20T10:00:00.000Z' }];
+        database.syncWatchedMediaState(watched);
+        if (action === 'rejected') database.updateRecommendationStatus('rec-505', action, feedback);
+        else database.snoozeRecommendation('rec-505');
+
+        database.syncWatchedMediaState(watched);
+
+        expect(database.getRecommendationById('rec-505')?.status).toBe(action);
+    });
+
+    it('keeps watched-state signals after reopening the database', async () => {
+        const { database, db } = await startDatabase();
+        database.syncWatchedMediaState([{ title: 'Persistent', mediaType: 'movie', tmdbId: 506, lastPlayedDate: '2026-09-20T10:00:00.000Z' }]);
+        db.close();
+
+        const reopened = await loadDatabaseModule();
+
+        expect(reopened.getWatchedMediaSignalSets().tmdbIds).toContain(506);
+    });
+
+    it('uses millisecond ISO versions when media-server synchronization changes a recommendation', async () => {
+        const { database } = await startDatabase();
+        database.addRecommendation(recommendation('rec-504', 'Contact'));
+
+        database.syncWatchedMediaState([{ title: 'Contact', mediaType: 'movie', tmdbId: 504 }]);
+
+        expect(database.getRecommendationById('rec-504')?.updatedAt)
+            .toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     });
 
     it('manually marks an existing recommendation watched and clears prior feedback', async () => {

@@ -74,7 +74,7 @@ export function SettingsDiagnostics({ connectionStates }: SettingsDiagnosticsPro
                     anchor.remove();
                 },
             });
-            dispatch({ type: 'backup_succeeded', filename: result.filename });
+            dispatch({ type: 'backup_download_started', filename: result.filename });
             resetAfter({ type: 'backup_reset' });
         } catch {
             dispatch({ type: 'backup_failed', message: 'Database backup could not be downloaded. Try again.' });
@@ -136,7 +136,7 @@ export function SettingsDiagnostics({ connectionStates }: SettingsDiagnosticsPro
                             <button ref={backupButtonRef} className="btn btn-ghost" type="button" onClick={() => void downloadBackup()} disabled={state.backup.status === 'preparing'}>
                                 {state.backup.status === 'preparing' ? 'Preparing backup...' : 'Download database backup'}
                             </button>
-                            {state.backup.status === 'downloaded' && <span className="diagnostics-status success" role="status">Downloaded {state.backup.filename}.</span>}
+                            {state.backup.status === 'download-started' && <span className="diagnostics-status success" role="status">Download started for {state.backup.filename}.</span>}
                             {state.backup.status === 'error' && <span className="diagnostics-status error" role="alert">{state.backup.message}</span>}
                         </div>
                     </div>

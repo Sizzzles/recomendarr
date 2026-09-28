@@ -48,8 +48,8 @@ describe('settings diagnostics model', () => {
 
         state = diagnosticsReducer(state, { type: 'backup_started' });
         expect(state.backup.status).toBe('preparing');
-        state = diagnosticsReducer(state, { type: 'backup_succeeded', filename: 'recomendarr-backup.db' });
-        expect(state.backup).toEqual({ status: 'downloaded', filename: 'recomendarr-backup.db' });
+        state = diagnosticsReducer(state, { type: 'backup_download_started', filename: 'recomendarr-backup.db' });
+        expect(state.backup).toEqual({ status: 'download-started', filename: 'recomendarr-backup.db' });
         state = diagnosticsReducer(state, { type: 'backup_reset' });
         expect(state.backup.status).toBe('idle');
         state = diagnosticsReducer(state, { type: 'backup_failed', message: 'Backup failed' });
@@ -95,20 +95,24 @@ describe('settings diagnostics model', () => {
         expect(parseAttachmentFilename(null)).toMatch(/^recomendarr-backup-.*\.db$/);
     });
 
-    it('revokes object URLs after triggering a backup download', async () => {
+    it('defers object URL revocation until after the browser has started the backup download', async () => {
         const click = vi.fn();
         const revokeObjectUrl = vi.fn();
+        let scheduledRevocation: (() => void) | undefined;
         const result = await downloadDatabaseBackup({
             fetchBackup: vi.fn().mockResolvedValue(new Response(new Blob(['sqlite']), {
                 headers: { 'Content-Disposition': 'attachment; filename="recomendarr-backup-2026-09-27_01-02-03.db"' },
             })),
             createObjectUrl: vi.fn().mockReturnValue('blob:backup'),
             revokeObjectUrl,
+            scheduleUrlRevocation: (revoke) => { scheduledRevocation = revoke; },
             triggerDownload: vi.fn(() => click()),
             now: () => new Date('2026-09-27T01:02:03Z'),
         });
         expect(result.filename).toBe('recomendarr-backup-2026-09-27_01-02-03.db');
         expect(click).toHaveBeenCalledOnce();
+        expect(revokeObjectUrl).not.toHaveBeenCalled();
+        scheduledRevocation?.();
         expect(revokeObjectUrl).toHaveBeenCalledWith('blob:backup');
     });
 

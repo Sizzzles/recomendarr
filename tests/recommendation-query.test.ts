@@ -9,7 +9,8 @@ vi.mock('../src/lib/config', () => ({
     config: { database: { get path() { return state.databasePath; } } },
 }));
 vi.mock('better-sqlite3', async (importOriginal) => {
-    const { default: Sqlite } = await importOriginal<typeof import('better-sqlite3')>();
+    type SqliteConstructor = new (filename: string) => import('better-sqlite3').Database;
+    const { default: Sqlite } = await importOriginal<{ default: SqliteConstructor }>();
     return { default: class extends Sqlite {
         constructor(filename: string) { super(filename); state.connections.push(this); }
     } };
