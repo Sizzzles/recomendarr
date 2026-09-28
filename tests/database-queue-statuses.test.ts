@@ -94,6 +94,7 @@ describe('Not now queue', () => {
             FROM recommendations WHERE id = 'rec-101'
         `).get() as { after_six_days: number; within_seven_days: number };
         expect(timing).toEqual({ after_six_days: 1, within_seven_days: 1 });
+        expect(snoozed[0].updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     });
 
     it('restores expired snoozes while leaving active snoozes alone', async () => {
@@ -107,6 +108,8 @@ describe('Not now queue', () => {
         expect(database.getRecommendations('not_now').map(item => item.id)).toEqual(['rec-202']);
         expect(db.prepare("SELECT snoozed_until FROM recommendations WHERE id = 'rec-201'").get())
             .toEqual({ snoozed_until: null });
+        expect(database.getRecommendationById('rec-201')?.updatedAt)
+            .toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     });
 
     it('clears snooze and feedback fields when manually returned to pending', async () => {
@@ -195,6 +198,28 @@ describe('Watched queue and learning', () => {
             .toEqual({ source: 'media_server', play_count: 1 });
     });
 
+    it('preserves a media-server event fingerprint through manual Watched and ignores the unchanged replay', async () => {
+        const { database, db } = await startDatabase();
+        database.addRecommendation(recommendation('rec-507', 'Moon'));
+        const original: WatchedItem = {
+            title: 'Moon', mediaType: 'movie', tmdbId: 507,
+            lastPlayedDate: '2026-09-20T10:00:00.000Z', playCount: 1,
+        };
+        database.syncWatchedMediaState([original]);
+
+        database.updateRecommendationStatus('rec-507', 'watched');
+        expect(db.prepare("SELECT source, last_played, play_count FROM watched_media_state WHERE tmdb_id = 507").get()).toEqual({
+            source: 'media_server', last_played: original.lastPlayedDate, play_count: 1,
+        });
+        database.updateRecommendationStatus('rec-507', 'pending');
+        database.syncWatchedMediaState([original]);
+
+        expect(database.getRecommendationById('rec-507')?.status).toBe('pending');
+
+        database.syncWatchedMediaState([{ ...original, lastPlayedDate: '2026-09-28T10:00:00.000Z', playCount: 2 }]);
+        expect(database.getRecommendationById('rec-507')?.status).toBe('watched');
+    });
+
     it('applies a later media-server watch event after a user returned an item to queue', async () => {
         const { database } = await startDatabase();
         database.addRecommendation(recommendation('rec-503', 'Heat'));
@@ -277,6 +302,8 @@ describe('Watched queue and learning', () => {
             imdbIds: new Set(['tt1234567']),
             titles: new Set(['existing film']),
         });
+        expect(database.getRecommendationById('rec-601')?.updatedAt)
+            .toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     });
 });
 

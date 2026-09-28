@@ -255,13 +255,22 @@ function watchedStateId(item: WatchedItem): string {
 }
 
 function resetExpiredNotNowRecommendations(db: Database.Database) {
-    db.prepare(`
-        UPDATE recommendations
-        SET status = 'pending', snoozed_until = NULL, updated_at = datetime('now')
+    const latest = db.prepare(`
+        SELECT MAX(updated_at) AS updated_at
+        FROM recommendations
         WHERE status = 'not_now'
           AND snoozed_until IS NOT NULL
           AND datetime(snoozed_until) <= datetime('now')
-    `).run();
+    `).get() as { updated_at: string | null };
+    if (!latest.updated_at) return;
+    const updatedAt = freshDatabaseTimestamp(latest.updated_at);
+    db.prepare(`
+        UPDATE recommendations
+        SET status = 'pending', snoozed_until = NULL, updated_at = ?
+        WHERE status = 'not_now'
+          AND snoozed_until IS NOT NULL
+          AND datetime(snoozed_until) <= datetime('now')
+    `).run(updatedAt);
 }
 
 // ---- Recommendation CRUD ----
@@ -414,16 +423,19 @@ export function updateRecommendationStatus(
 export function snoozeRecommendation(id: string, days = 7): boolean {
     const db = getDatabase();
     const snoozeDays = Math.max(1, Math.min(365, Math.floor(days)));
+    const existing = getRecommendationById(id);
+    const updatedAt = freshDatabaseTimestamp(existing?.updatedAt);
+    const snoozedUntil = new Date(Date.now() + snoozeDays * 86400000).toISOString();
     const result = db.prepare(`
         UPDATE recommendations
         SET status = 'not_now',
-            snoozed_until = datetime('now', '+' || ? || ' days'),
+            snoozed_until = ?,
             feedback_reason = NULL,
             feedback_notes = NULL,
             feedback_at = NULL,
-            updated_at = datetime('now')
+            updated_at = ?
         WHERE id = ?
-    `).run(snoozeDays, id);
+    `).run(snoozedUntil, updatedAt, id);
     return result.changes > 0;
 }
 
@@ -444,8 +456,16 @@ export function syncWatchedMediaState(items: WatchedItem[], source: 'media_serve
           tmdb_id = excluded.tmdb_id,
           tvdb_id = excluded.tvdb_id,
           imdb_id = excluded.imdb_id,
-          last_played = excluded.last_played,
-          play_count = excluded.play_count,
+          last_played = CASE
+            WHEN excluded.source = 'manual' AND watched_media_state.source = 'media_server'
+            THEN watched_media_state.last_played
+            ELSE excluded.last_played
+          END,
+          play_count = CASE
+            WHEN excluded.source = 'manual' AND watched_media_state.source = 'media_server'
+            THEN watched_media_state.play_count
+            ELSE excluded.play_count
+          END,
           source = CASE
             WHEN watched_media_state.source = 'media_server' OR excluded.source = 'media_server' THEN 'media_server'
             ELSE 'manual'
@@ -475,10 +495,12 @@ export function syncWatchedMediaState(items: WatchedItem[], source: 'media_serve
             const existing = findExisting.get(id) as {
                 last_played: string | null;
                 play_count: number | null;
+                source: 'media_server' | 'manual';
                 updated_at: string;
             } | undefined;
-            const lastPlayed = item.lastPlayedDate || null;
-            const playCount = item.playCount ?? null;
+            const preserveMediaServerEvent = source === 'manual' && existing?.source === 'media_server';
+            const lastPlayed = preserveMediaServerEvent ? existing.last_played : item.lastPlayedDate || null;
+            const playCount = preserveMediaServerEvent ? existing.play_count : item.playCount ?? null;
             const isNewWatchEvent = !existing || existing.last_played !== lastPlayed || existing.play_count !== playCount;
             const updatedAt = isNewWatchEvent ? freshDatabaseTimestamp(existing?.updated_at) : existing.updated_at;
             upsert.run(
@@ -529,10 +551,11 @@ export function getWatchedMediaSignalSets(): {
 export function addWatchedRecommendation(rec: Recommendation): Recommendation {
     const db = getDatabase();
     const existing = rec.tmdbId
-        ? db.prepare('SELECT id FROM recommendations WHERE tmdb_id = ? AND media_type = ?').get(rec.tmdbId, rec.mediaType) as { id: string } | undefined
-        : db.prepare('SELECT id FROM recommendations WHERE lower(title) = ? AND media_type = ?').get(normalizeTitle(rec.title), rec.mediaType) as { id: string } | undefined;
+        ? db.prepare('SELECT id, updated_at FROM recommendations WHERE tmdb_id = ? AND media_type = ?').get(rec.tmdbId, rec.mediaType) as { id: string; updated_at: string } | undefined
+        : db.prepare('SELECT id, updated_at FROM recommendations WHERE lower(title) = ? AND media_type = ?').get(normalizeTitle(rec.title), rec.mediaType) as { id: string; updated_at: string } | undefined;
 
     if (existing) {
+        const updatedAt = freshDatabaseTimestamp(existing.updated_at);
         db.prepare(`
             UPDATE recommendations
             SET status = 'watched',
@@ -542,9 +565,9 @@ export function addWatchedRecommendation(rec: Recommendation): Recommendation {
                 feedback_reason = NULL,
                 feedback_notes = NULL,
                 feedback_at = NULL,
-                updated_at = datetime('now')
+                updated_at = ?
             WHERE id = ?
-        `).run(rec.tvdbId || null, rec.imdbId || null, existing.id);
+        `).run(rec.tvdbId || null, rec.imdbId || null, updatedAt, existing.id);
         const saved = { ...rec, id: existing.id, status: 'watched' as const };
         syncWatchedMediaState([saved], 'manual');
         return saved;
