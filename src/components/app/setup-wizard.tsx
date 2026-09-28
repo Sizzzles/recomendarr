@@ -319,7 +319,7 @@ export function SetupWizard({
                                     <option value="">Select a root folder</option>
                                     {discovery.sonarrRootFolders.map((folder) => (
                                         <option key={folder.id} value={folder.path}>
-                                            {folder.path} ({(folder.freeSpace / 1e12).toFixed(2)} TB free)
+                                            {folder.path} ({folder.freeSpace === undefined ? 'space unknown' : `${(folder.freeSpace / 1e12).toFixed(2)} TB free`})
                                         </option>
                                     ))}
                                 </select>
@@ -378,7 +378,7 @@ export function SetupWizard({
                                     <option value="">Select a root folder</option>
                                     {discovery.radarrRootFolders.map((folder) => (
                                         <option key={folder.id} value={folder.path}>
-                                            {folder.path} ({(folder.freeSpace / 1e12).toFixed(2)} TB free)
+                                            {folder.path} ({folder.freeSpace === undefined ? 'space unknown' : `${(folder.freeSpace / 1e12).toFixed(2)} TB free`})
                                         </option>
                                     ))}
                                 </select>

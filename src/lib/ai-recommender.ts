@@ -252,11 +252,7 @@ export async function testAiConnection(override?: AppConfig['ai']): Promise<bool
     if (!ai.enabled || !ai.apiKey) return false;
     try {
         const client = getClient(ai);
-        await client.chat.completions.create({
-            model: ai.model,
-            messages: [{ role: 'user', content: 'Say "ok"' }],
-            max_tokens: 5,
-        });
+        await client.models.retrieve(ai.model);
         addLog({ level: 'INFO', message: 'AI connection test successful', source: 'ai' });
         return true;
     } catch (err) {

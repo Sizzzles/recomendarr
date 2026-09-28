@@ -11,6 +11,9 @@ import { PlexSignIn } from './plex-sign-in';
 import type { ConnectedPlexServer } from './plex-sign-in-model';
 import { isMediaServerConfigured } from './plex-sign-in-model';
 import type { DiscoveredPlexUser } from './plex-sign-in-client';
+import { ConnectionTestResult } from './connection-test-result';
+import { getServiceGuidance, getServiceGuidanceId, getServiceTestAccessibleName } from './service-guidance';
+import { SettingsDiagnostics } from './settings-diagnostics';
 
 interface SettingsPageProps {
     connResults: Record<string, ConnectionResult>;
@@ -44,9 +47,9 @@ export function SettingsPage({
     const [discovery, setDiscovery] = useState({
         mediaUsers: [] as Array<{ id: string; name: string }>,
         sonarrProfiles: [] as Array<{ id: number; name: string }>,
-        sonarrRootFolders: [] as Array<{ id: number; path: string; freeSpace: number }>,
+        sonarrRootFolders: [] as Array<{ id: number; path: string; freeSpace?: number }>,
         radarrProfiles: [] as Array<{ id: number; name: string }>,
-        radarrRootFolders: [] as Array<{ id: number; path: string; freeSpace: number }>,
+        radarrRootFolders: [] as Array<{ id: number; path: string; freeSpace?: number }>,
     });
 
     useEffect(() => {
@@ -200,6 +203,12 @@ export function SettingsPage({
         [dashboardSummary.feedbackProfile]
     );
     const isDirty = loaded && JSON.stringify(formData) !== savedSnapshot;
+    const diagnosticConnectionStates = Object.entries(connResults)
+        .filter(([, result]) => result.testing || result.success !== undefined)
+        .map(([name, result]) => ({
+            name,
+            state: result.testing ? 'testing' : result.success ? 'connected' : 'failed',
+        }));
 
     if (!loaded) {
         return (
@@ -277,13 +286,17 @@ export function SettingsPage({
                             </div>
                             <div className="section-health-row">
                                 <HealthBadge label={mediaStatus.label} status={mediaStatus.status} />
-                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('mediaServer')} disabled={connResults.mediaServer?.testing}>
+                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('mediaServer')} disabled={connResults.mediaServer?.testing} aria-label={getServiceTestAccessibleName('mediaServer')}>
                                     {connResults.mediaServer?.testing ? 'Testing...' : 'Test connection'}
                                 </button>
                             </div>
                         </div>
 
                         <div className="field-row">
+                            <div className="service-guidance" id={getServiceGuidanceId('mediaServer')}>
+                                {getServiceGuidance('mediaServer', formData, plexConnected).map((message) => <p key={message}>{message}</p>)}
+                            </div>
+                            <ConnectionTestResult result={connResults.mediaServer} />
                             <label>Server type</label>
                             <div className="chip-grid">
                                 {(['plex', 'jellyfin', 'emby'] as const).map((type) => (
@@ -313,6 +326,7 @@ export function SettingsPage({
                                     value={formData.media_server_url}
                                     onChange={(event) => updateField('media_server_url', event.target.value)}
                                     placeholder={formData.media_server_type === 'plex' ? 'http://192.168.1.100:32400' : 'http://192.168.1.100:8096'}
+                                    aria-describedby={getServiceGuidanceId('mediaServer')}
                                 />
                             </label>
                             <label className="field-row">
@@ -321,6 +335,7 @@ export function SettingsPage({
                                     type="password"
                                     value={formData.media_server_api_key}
                                     onChange={(event) => updateField('media_server_api_key', event.target.value)}
+                                    aria-describedby={getServiceGuidanceId('mediaServer')}
                                 />
                             </label>
                         </div>
@@ -368,27 +383,32 @@ export function SettingsPage({
                             </div>
                             <div className="section-health-row">
                                 <HealthBadge label={sonarrStatus.label} status={sonarrStatus.status} />
-                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('sonarr')} disabled={connResults.sonarr?.testing}>
+                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('sonarr')} disabled={connResults.sonarr?.testing} aria-label={getServiceTestAccessibleName('sonarr')}>
                                     {connResults.sonarr?.testing ? 'Testing...' : 'Test connection'}
                                 </button>
                             </div>
                         </div>
 
+                        <div className="service-guidance" id={getServiceGuidanceId('sonarr')}>
+                            {getServiceGuidance('sonarr', formData, plexConnected).map((message) => <p key={message}>{message}</p>)}
+                        </div>
+                        <ConnectionTestResult result={connResults.sonarr} />
+
                         <div className="settings-grid two">
                             <label className="field-row">
                                 <span>Sonarr URL</span>
-                                <input type="text" value={formData.sonarr_url} onChange={(event) => updateField('sonarr_url', event.target.value)} />
+                                <input type="text" value={formData.sonarr_url} onChange={(event) => updateField('sonarr_url', event.target.value)} aria-describedby={getServiceGuidanceId('sonarr')} />
                             </label>
                             <label className="field-row">
                                 <span>API key</span>
-                                <input type="password" value={formData.sonarr_api_key} onChange={(event) => updateField('sonarr_api_key', event.target.value)} />
+                                <input type="password" value={formData.sonarr_api_key} onChange={(event) => updateField('sonarr_api_key', event.target.value)} aria-describedby={getServiceGuidanceId('sonarr')} />
                             </label>
                         </div>
 
                         {sonarrProfiles.length > 0 && (
                             <label className="field-row">
                                 <span>Default quality profile</span>
-                                <select value={formData.sonarr_quality_profile_id} onChange={(event) => updateField('sonarr_quality_profile_id', event.target.value)}>
+                                <select value={formData.sonarr_quality_profile_id} onChange={(event) => updateField('sonarr_quality_profile_id', event.target.value)} aria-describedby={getServiceGuidanceId('sonarr')}>
                                     <option value="">Select a quality profile</option>
                                     {sonarrProfiles.map((profile) => (
                                         <option key={profile.id} value={profile.id}>
@@ -402,11 +422,11 @@ export function SettingsPage({
                         {sonarrRootFolders.length > 0 && (
                             <label className="field-row">
                                 <span>Default root folder</span>
-                                <select value={formData.sonarr_root_folder} onChange={(event) => updateField('sonarr_root_folder', event.target.value)}>
+                                <select value={formData.sonarr_root_folder} onChange={(event) => updateField('sonarr_root_folder', event.target.value)} aria-describedby={getServiceGuidanceId('sonarr')}>
                                     <option value="">Select a root folder</option>
                                     {sonarrRootFolders.map((folder) => (
                                         <option key={folder.id} value={folder.path}>
-                                            {folder.path} ({(folder.freeSpace / 1e12).toFixed(2)} TB free)
+                                            {folder.path} ({folder.freeSpace === undefined ? 'space unknown' : `${(folder.freeSpace / 1e12).toFixed(2)} TB free`})
                                         </option>
                                     ))}
                                 </select>
@@ -422,27 +442,32 @@ export function SettingsPage({
                             </div>
                             <div className="section-health-row">
                                 <HealthBadge label={radarrStatus.label} status={radarrStatus.status} />
-                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('radarr')} disabled={connResults.radarr?.testing}>
+                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('radarr')} disabled={connResults.radarr?.testing} aria-label={getServiceTestAccessibleName('radarr')}>
                                     {connResults.radarr?.testing ? 'Testing...' : 'Test connection'}
                                 </button>
                             </div>
                         </div>
 
+                        <div className="service-guidance" id={getServiceGuidanceId('radarr')}>
+                            {getServiceGuidance('radarr', formData, plexConnected).map((message) => <p key={message}>{message}</p>)}
+                        </div>
+                        <ConnectionTestResult result={connResults.radarr} />
+
                         <div className="settings-grid two">
                             <label className="field-row">
                                 <span>Radarr URL</span>
-                                <input type="text" value={formData.radarr_url} onChange={(event) => updateField('radarr_url', event.target.value)} />
+                                <input type="text" value={formData.radarr_url} onChange={(event) => updateField('radarr_url', event.target.value)} aria-describedby={getServiceGuidanceId('radarr')} />
                             </label>
                             <label className="field-row">
                                 <span>API key</span>
-                                <input type="password" value={formData.radarr_api_key} onChange={(event) => updateField('radarr_api_key', event.target.value)} />
+                                <input type="password" value={formData.radarr_api_key} onChange={(event) => updateField('radarr_api_key', event.target.value)} aria-describedby={getServiceGuidanceId('radarr')} />
                             </label>
                         </div>
 
                         {radarrProfiles.length > 0 && (
                             <label className="field-row">
                                 <span>Default quality profile</span>
-                                <select value={formData.radarr_quality_profile_id} onChange={(event) => updateField('radarr_quality_profile_id', event.target.value)}>
+                                <select value={formData.radarr_quality_profile_id} onChange={(event) => updateField('radarr_quality_profile_id', event.target.value)} aria-describedby={getServiceGuidanceId('radarr')}>
                                     <option value="">Select a quality profile</option>
                                     {radarrProfiles.map((profile) => (
                                         <option key={profile.id} value={profile.id}>
@@ -456,11 +481,11 @@ export function SettingsPage({
                         {radarrRootFolders.length > 0 && (
                             <label className="field-row">
                                 <span>Default root folder</span>
-                                <select value={formData.radarr_root_folder} onChange={(event) => updateField('radarr_root_folder', event.target.value)}>
+                                <select value={formData.radarr_root_folder} onChange={(event) => updateField('radarr_root_folder', event.target.value)} aria-describedby={getServiceGuidanceId('radarr')}>
                                     <option value="">Select a root folder</option>
                                     {radarrRootFolders.map((folder) => (
                                         <option key={folder.id} value={folder.path}>
-                                            {folder.path} ({(folder.freeSpace / 1e12).toFixed(2)} TB free)
+                                            {folder.path} ({folder.freeSpace === undefined ? 'space unknown' : `${(folder.freeSpace / 1e12).toFixed(2)} TB free`})
                                         </option>
                                     ))}
                                 </select>
@@ -480,11 +505,17 @@ export function SettingsPage({
                             </div>
                             <div className="section-health-row">
                                 <HealthBadge label={aiStatus.label} status={aiStatus.status} />
-                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('ai')} disabled={connResults.ai?.testing}>
+                                <button className="btn btn-ghost btn-sm" onClick={() => handleTest('ai')} disabled={connResults.ai?.testing} aria-label={getServiceTestAccessibleName('ai')}>
                                     {connResults.ai?.testing ? 'Testing...' : 'Test connection'}
                                 </button>
                             </div>
                         </div>
+
+                        <div className="service-guidance" id={getServiceGuidanceId('ai')}>
+                            {getServiceGuidance('ai', formData, plexConnected).map((message) => <p key={message}>{message}</p>)}
+                            {getServiceGuidance('tmdb', formData, plexConnected).map((message) => <p key={message}>{message}</p>)}
+                        </div>
+                        <ConnectionTestResult result={connResults.ai} />
 
                         <label className="toggle-card">
                             <div>
@@ -502,15 +533,15 @@ export function SettingsPage({
                             <div className="settings-grid two">
                                 <label className="field-row">
                                     <span>Provider URL</span>
-                                    <input type="text" value={formData.ai_provider_url} onChange={(event) => updateField('ai_provider_url', event.target.value)} />
+                                    <input type="text" value={formData.ai_provider_url} onChange={(event) => updateField('ai_provider_url', event.target.value)} aria-describedby={getServiceGuidanceId('ai')} />
                                 </label>
                                 <label className="field-row">
                                     <span>Model</span>
-                                    <input type="text" value={formData.ai_model} onChange={(event) => updateField('ai_model', event.target.value)} />
+                                    <input type="text" value={formData.ai_model} onChange={(event) => updateField('ai_model', event.target.value)} aria-describedby={getServiceGuidanceId('ai')} />
                                 </label>
                                 <label className="field-row span-2">
                                     <span>API key</span>
-                                    <input type="password" value={formData.ai_api_key} onChange={(event) => updateField('ai_api_key', event.target.value)} />
+                                    <input type="password" value={formData.ai_api_key} onChange={(event) => updateField('ai_api_key', event.target.value)} aria-describedby={getServiceGuidanceId('ai')} />
                                 </label>
                             </div>
                         )}
@@ -540,6 +571,7 @@ export function SettingsPage({
 
             {activeTab === 'advanced' && (
                 <div className="settings-stack">
+                    <SettingsDiagnostics connectionStates={diagnosticConnectionStates} />
                     <section className="settings-card">
                         <div className="section-heading">
                             <div>

@@ -1,0 +1,11 @@
+{
+    "chat.mcp.serverSampling": {
+        "Recomendarr/.vscode/mcp.json: microsoft/playwright-mcp": {
+            "allowedModels": [
+                "copilot/auto",
+                "copilotcli/auto",
+                "agent-host-copilotcli:auto"
+            ]
+        }
+    }
+}

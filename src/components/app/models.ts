@@ -22,7 +22,7 @@ export interface ArrProfile {
 export interface ArrFolder {
     id: number;
     path: string;
-    freeSpace: number;
+    freeSpace?: number;
 }
 
 export interface DiscoveryUser {
@@ -67,12 +67,15 @@ export interface ConnectionResult {
     testing: boolean;
     data?: {
         success?: boolean;
+        message?: string;
+        details?: Record<string, string | number | boolean>;
         users?: DiscoveryUser[];
         profiles?: ArrProfile[];
         rootFolders?: ArrFolder[];
         error?: string;
         type?: string;
         model?: string;
+        movieTitle?: string;
     };
 }
 

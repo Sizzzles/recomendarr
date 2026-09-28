@@ -1,12 +1,13 @@
 'use client';
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { FeedbackProfile, Recommendation } from '@/lib/types';
 import type { Counts, RecommendationFilter } from './models';
 import type { RecommendationSort } from '../../lib/recommendation-query';
 import { getBulkAddEligibility, getQueueEmptyState, pruneSelection, selectAllVisible } from './queue-model';
 import { RecommendationDetail } from './recommendation-detail';
 import { formatFeedbackReason, getLearningHighlights, getRecommendationSignals } from './utils';
+import { getDialogFocusWrapTarget, getScrollLockPadding, QUEUE_DETAIL_OVERLAY_BREAKPOINT } from './queue-responsive';
 
 interface RecommendationsWorkspaceProps {
     recs: Recommendation[];
@@ -61,11 +62,68 @@ export function RecommendationsWorkspace({
     const [librarySort, setLibrarySort] = useState<'newest' | 'rating'>('newest');
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [usesDetailOverlay, setUsesDetailOverlay] = useState(false);
+    const [detailOverlayOpen, setDetailOverlayOpen] = useState(false);
     const deferredQuery = useDeferredValue(librarySearch);
     const scrollRef = useRef<HTMLDivElement | null>(null);
     const sentinelRef = useRef<HTMLDivElement | null>(null);
+    const detailDialogRef = useRef<HTMLDialogElement | null>(null);
+    const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
     const queueCount = counts.pending + counts.rejected;
     const isQueueMode = mode === 'queue';
+
+    useEffect(() => {
+        if (!isQueueMode) return;
+        const mediaQuery = window.matchMedia(`(max-width: ${QUEUE_DETAIL_OVERLAY_BREAKPOINT - 1}px)`);
+        const updateLayout = () => setUsesDetailOverlay(mediaQuery.matches);
+        updateLayout();
+        mediaQuery.addEventListener('change', updateLayout);
+        return () => mediaQuery.removeEventListener('change', updateLayout);
+    }, [isQueueMode]);
+
+    useEffect(() => {
+        const dialog = detailDialogRef.current;
+        if (!dialog) return;
+
+        if (!usesDetailOverlay || !detailOverlayOpen) {
+            if (dialog.open) dialog.close();
+            return;
+        }
+
+        const previousOverflow = document.body.style.overflow;
+        const previousPaddingRight = document.body.style.paddingRight;
+        const appMain = document.querySelector<HTMLElement>('.app-main');
+        const previousMainOverflow = appMain?.style.overflowY || '';
+        const compensation = getScrollLockPadding(window.innerWidth, document.documentElement.clientWidth);
+        const currentPadding = Number.parseFloat(window.getComputedStyle(document.body).paddingRight) || 0;
+        document.body.style.overflow = 'hidden';
+        if (appMain) appMain.style.overflowY = 'hidden';
+        if (compensation > 0) document.body.style.paddingRight = `${currentPadding + compensation}px`;
+        if (!dialog.open) dialog.showModal();
+
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            document.body.style.paddingRight = previousPaddingRight;
+            if (appMain) appMain.style.overflowY = previousMainOverflow;
+        };
+    }, [detailOverlayOpen, usesDetailOverlay]);
+
+    const closeDetailOverlay = () => {
+        setDetailOverlayOpen(false);
+        window.requestAnimationFrame(() => detailTriggerRef.current?.focus());
+    };
+
+    const containDialogFocus = (event: KeyboardEvent<HTMLDialogElement>) => {
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((element) => !element.hasAttribute('hidden'));
+        const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+        const targetIndex = getDialogFocusWrapTarget(currentIndex, focusable.length, event.shiftKey);
+        if (targetIndex === null) return;
+        event.preventDefault();
+        focusable[targetIndex]?.focus();
+    };
 
     const filteredRecs = useMemo(() => {
         if (isQueueMode) return recs;
@@ -225,11 +283,12 @@ export function RecommendationsWorkspace({
                     <input
                         type="text"
                         className="workspace-search"
-                        placeholder={copy.searchPlaceholder}
+                        placeholder={isQueueMode && usesDetailOverlay ? 'Search Queue...' : copy.searchPlaceholder}
                         value={isQueueMode ? (search || '') : librarySearch}
                         onChange={(event) => isQueueMode ? onSearchChange?.(event.target.value) : setLibrarySearch(event.target.value)}
                     />
                     <select
+                        aria-label={isQueueMode ? 'Sort recommendations' : 'Sort library titles'}
                         value={isQueueMode ? (sort || 'newest') : librarySort}
                         onChange={(event) => isQueueMode
                             ? onSortChange?.(event.target.value as RecommendationSort)
@@ -263,7 +322,7 @@ export function RecommendationsWorkspace({
                     )}
                 </div>
             ) : (
-                <div className="workspace-shell">
+                <div className={`workspace-shell ${isQueueMode ? 'queue-workspace-shell' : ''}`}>
                     <aside className="workspace-list">
                         <div className="workspace-list-header">
                             <div>
@@ -278,32 +337,42 @@ export function RecommendationsWorkspace({
                                 const learningHighlights = getLearningHighlights(rec, feedbackProfile);
 
                                 return (
-                                    <div
+                                    <article
                                         key={rec.id}
-                                        className={`workspace-item ${resolvedSelectedId === rec.id ? 'active' : ''}`}
-                                        onClick={() => setSelectedId(rec.id || null)}
-                                        onKeyDown={(event) => { if (event.key === 'Enter') setSelectedId(rec.id || null); }}
-                                        role="button"
-                                        tabIndex={0}
+                                        className={`workspace-item ${resolvedSelectedId === rec.id ? 'active' : ''} ${isQueueMode ? 'selectable' : ''} ${rec.id && selectedIds.has(rec.id) ? 'selected' : ''}`}
                                     >
                                         {isQueueMode && rec.id && (
-                                            <input
-                                                type="checkbox"
-                                                className="queue-select"
-                                                aria-label={`Select ${rec.title}`}
-                                                checked={selectedIds.has(rec.id)}
-                                                disabled={mutationBusy}
-                                                onClick={(event) => event.stopPropagation()}
-                                                onChange={(event) => setSelectedIds(current => {
-                                                    const next = new Set(current);
-                                                    if (event.target.checked) next.add(rec.id!); else next.delete(rec.id!);
-                                                    return next;
-                                                })}
-                                            />
+                                            <label className="queue-select-control">
+                                                <input
+                                                    type="checkbox"
+                                                    className="queue-select-input"
+                                                    aria-label={`Select ${rec.title}`}
+                                                    checked={selectedIds.has(rec.id)}
+                                                    disabled={mutationBusy}
+                                                    onChange={(event) => setSelectedIds(current => {
+                                                        const next = new Set(current);
+                                                        if (event.target.checked) next.add(rec.id!); else next.delete(rec.id!);
+                                                        return next;
+                                                    })}
+                                                />
+                                                <span className="queue-select-indicator" aria-hidden="true" />
+                                            </label>
                                         )}
+                                        <button
+                                            type="button"
+                                            className="workspace-item-trigger"
+                                            aria-label={`View details for ${rec.title}`}
+                                            onClick={(event) => {
+                                                setSelectedId(rec.id || null);
+                                                if (usesDetailOverlay) {
+                                                    detailTriggerRef.current = event.currentTarget;
+                                                    setDetailOverlayOpen(true);
+                                                }
+                                            }}
+                                        />
                                         <div className="workspace-item-poster">
                                             {rec.posterUrl ? (
-                                                <img src={rec.posterUrl} alt={rec.title} />
+                                                <img src={rec.posterUrl} alt="" />
                                             ) : (
                                                 <div className="workspace-item-poster placeholder">No poster</div>
                                             )}
@@ -348,7 +417,7 @@ export function RecommendationsWorkspace({
                                                 </p>
                                             )}
                                         </div>
-                                    </div>
+                                    </article>
                                 );
                             })}
 
@@ -369,7 +438,7 @@ export function RecommendationsWorkspace({
                         </div>
                     </aside>
 
-                    <div className="workspace-detail">
+                    <div className="workspace-detail desktop-workspace-detail">
                         <RecommendationDetail
                             recommendation={selectedRecommendation}
                             feedbackProfile={feedbackProfile}
@@ -378,6 +447,38 @@ export function RecommendationsWorkspace({
                             emptyState={copy.detailEmpty}
                         />
                     </div>
+
+                    {isQueueMode && (
+                        <dialog
+                            ref={detailDialogRef}
+                            className="queue-detail-dialog"
+                            aria-label={selectedRecommendation ? `Recommendation details for ${selectedRecommendation.title}` : 'Recommendation details'}
+                            onCancel={(event) => {
+                                event.preventDefault();
+                                closeDetailOverlay();
+                            }}
+                            onKeyDown={containDialogFocus}
+                            onClose={() => {
+                                if (detailOverlayOpen) closeDetailOverlay();
+                            }}
+                        >
+                            <div className="queue-detail-dialog-header">
+                                <strong>Recommendation details</strong>
+                                <button type="button" className="btn btn-ghost btn-sm" onClick={closeDetailOverlay}>
+                                    Close
+                                </button>
+                            </div>
+                            <div className="queue-detail-dialog-scroll">
+                                <RecommendationDetail
+                                    recommendation={selectedRecommendation}
+                                    feedbackProfile={feedbackProfile}
+                                    loading={loading || Boolean(selectedRecommendation?.id && mutatingIds.has(selectedRecommendation.id))}
+                                    onAction={onAction}
+                                    emptyState={copy.detailEmpty}
+                                />
+                            </div>
+                        </dialog>
+                    )}
                 </div>
             )}
         </div>

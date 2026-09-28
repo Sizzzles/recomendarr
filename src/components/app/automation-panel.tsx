@@ -3,6 +3,7 @@ import type { SettingsFormData } from './models';
 import { SCHEDULE_PRESETS } from './models';
 import { HealthBadge } from './health-badge';
 import { formatDateTime, formatRelativeDate } from './utils';
+import { getServiceGuidance, getServiceGuidanceId } from './service-guidance';
 
 interface SchedulerPreview {
     nextRun: string | null;
@@ -42,6 +43,10 @@ export function AutomationPanel({
                         <HealthBadge label={automationEnabled ? 'Scheduler enabled' : 'Manual only'} status={automationEnabled ? 'healthy' : 'neutral'} />
                         <HealthBadge label={formData.auto_add === 'true' ? 'Auto-add on' : 'Review required'} status={formData.auto_add === 'true' ? 'warning' : 'neutral'} />
                     </div>
+                </div>
+
+                <div className="service-guidance" id={getServiceGuidanceId('scheduler')}>
+                    {getServiceGuidance('scheduler', formData, false).map((message) => <p key={message}>{message}</p>)}
                 </div>
 
                 <label className="toggle-card">
@@ -105,6 +110,7 @@ export function AutomationPanel({
                                     value={formData.cron_schedule}
                                     onChange={(event) => updateField('cron_schedule', event.target.value)}
                                     placeholder="0 8,20 * * *"
+                                    aria-describedby={getServiceGuidanceId('scheduler')}
                                 />
                             </label>
                         )}

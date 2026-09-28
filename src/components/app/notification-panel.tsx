@@ -1,5 +1,7 @@
 import type { ConnectionResult, SettingsFormData } from './models';
 import { HealthBadge } from './health-badge';
+import { ConnectionTestResult } from './connection-test-result';
+import { getServiceGuidance, getServiceGuidanceId, getServiceTestAccessibleName } from './service-guidance';
 
 interface NotificationPanelProps {
     formData: SettingsFormData;
@@ -53,6 +55,9 @@ export function NotificationPanel({
                                 onChange={(event) => updateField('discord_enabled', event.target.checked ? 'true' : 'false')}
                             />
                         </div>
+                        <div className="service-guidance" id={getServiceGuidanceId('discord')}>
+                            {getServiceGuidance('discord', formData, false).map((message) => <p key={message}>{message}</p>)}
+                        </div>
                         <label className="field-row">
                             <span>Webhook URL</span>
                             <input
@@ -60,6 +65,7 @@ export function NotificationPanel({
                                 value={formData.discord_webhook_url}
                                 onChange={(event) => updateField('discord_webhook_url', event.target.value)}
                                 placeholder="https://discord.com/api/webhooks/..."
+                                aria-describedby={getServiceGuidanceId('discord')}
                             />
                         </label>
                         <button
@@ -67,6 +73,7 @@ export function NotificationPanel({
                             className="btn btn-ghost"
                             onClick={() => onTestChannel('discord')}
                             disabled={connResults.discord?.testing}
+                            aria-label={getServiceTestAccessibleName('discord')}
                         >
                             {connResults.discord?.testing ? (
                                 <>
@@ -77,6 +84,7 @@ export function NotificationPanel({
                                 'Send test'
                             )}
                         </button>
+                        <ConnectionTestResult result={connResults.discord} />
                     </article>
 
                     <article className="channel-card">
@@ -91,6 +99,9 @@ export function NotificationPanel({
                                 onChange={(event) => updateField('telegram_enabled', event.target.checked ? 'true' : 'false')}
                             />
                         </div>
+                        <div className="service-guidance" id={getServiceGuidanceId('telegram')}>
+                            {getServiceGuidance('telegram', formData, false).map((message) => <p key={message}>{message}</p>)}
+                        </div>
                         <label className="field-row">
                             <span>Bot token</span>
                             <input
@@ -98,6 +109,7 @@ export function NotificationPanel({
                                 value={formData.telegram_bot_token}
                                 onChange={(event) => updateField('telegram_bot_token', event.target.value)}
                                 placeholder="123456:ABC..."
+                                aria-describedby={getServiceGuidanceId('telegram')}
                             />
                         </label>
                         <label className="field-row">
@@ -107,6 +119,7 @@ export function NotificationPanel({
                                 value={formData.telegram_chat_id}
                                 onChange={(event) => updateField('telegram_chat_id', event.target.value)}
                                 placeholder="-1001234567890"
+                                aria-describedby={getServiceGuidanceId('telegram')}
                             />
                         </label>
                         <button
@@ -114,6 +127,7 @@ export function NotificationPanel({
                             className="btn btn-ghost"
                             onClick={() => onTestChannel('telegram')}
                             disabled={connResults.telegram?.testing}
+                            aria-label={getServiceTestAccessibleName('telegram')}
                         >
                             {connResults.telegram?.testing ? (
                                 <>
@@ -124,6 +138,7 @@ export function NotificationPanel({
                                 'Send test'
                             )}
                         </button>
+                        <ConnectionTestResult result={connResults.telegram} />
                     </article>
                 </div>
             </section>

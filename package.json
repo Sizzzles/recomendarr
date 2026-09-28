@@ -11,6 +11,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@playwright/test": "^1.63.0",
     "axios": "^1.13.5",
     "better-sqlite3": "^12.6.2",
     "next": "16.1.6",

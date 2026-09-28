@@ -678,6 +678,23 @@ export function clearLogs(): void {
     db.prepare('DELETE FROM logs').run();
 }
 
+export interface DiagnosticErrorRow {
+    timestamp: string;
+    source: string;
+    message: string;
+}
+
+export function getRecentErrorLogRows(limit = 20, database: Database.Database = getDatabase()): DiagnosticErrorRow[] {
+    const safeLimit = Math.max(0, Math.min(20, Math.trunc(limit)));
+    return database.prepare(
+        `SELECT timestamp, source, message
+         FROM logs
+         WHERE level = 'ERROR'
+         ORDER BY timestamp DESC, id DESC
+         LIMIT ?`
+    ).all(safeLimit) as DiagnosticErrorRow[];
+}
+
 // ---- Settings ----
 
 export function getSetting(key: string): string | null {
@@ -701,4 +718,15 @@ export function getAllSettings(): Record<string, string> {
         settings[row.key] = row.value;
     }
     return settings;
+}
+
+export function getAppliedMigrations(database: Database.Database = getDatabase()): string[] {
+    const rows = database.prepare(
+        `SELECT key
+         FROM settings
+         WHERE key GLOB 'migration_*'
+           AND value = 'true'
+         ORDER BY key ASC`
+    ).all() as Array<{ key: string }>;
+    return rows.map((row) => row.key);
 }

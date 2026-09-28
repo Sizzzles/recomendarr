@@ -697,9 +697,13 @@ function HomeContent() {
                 [service]: { success: data.success, testing: false, data },
             }));
             return data;
-        } catch (error) {
-            setConnResults((prev) => ({ ...prev, [service]: { success: false, testing: false } }));
-            toast((error as Error).message, 'error');
+        } catch {
+            const message = 'Connection test could not be completed. Check that Recomendarr can reach the service.';
+            setConnResults((prev) => ({
+                ...prev,
+                [service]: { success: false, testing: false, data: { success: false, message } },
+            }));
+            toast(message, 'error');
             return null;
         }
     };

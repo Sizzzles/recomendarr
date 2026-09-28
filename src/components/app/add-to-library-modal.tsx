@@ -97,7 +97,7 @@ export function AddToLibraryModal({
                                 <select value={selectedFolder} onChange={(event) => onFolderChange(event.target.value)}>
                                     {folders.map((folder) => (
                                         <option key={folder.id} value={folder.path}>
-                                            {folder.path} ({(folder.freeSpace / 1e12).toFixed(2)} TB free)
+                                            {folder.path} ({folder.freeSpace === undefined ? 'space unknown' : `${(folder.freeSpace / 1e12).toFixed(2)} TB free`})
                                         </option>
                                     ))}
                                 </select>
