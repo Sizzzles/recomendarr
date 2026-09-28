@@ -1712,6 +1712,40 @@ textarea {
   }
 }
 
+.service-health-strip { display: flex; gap: .65rem; min-width: 0; }
+.service-health-strip.compact { margin: 0 0 1rem; overflow-x: auto; padding-bottom: .25rem; }
+.service-health-item { display: flex; align-items: center; gap: .45rem; min-width: max-content; border: 1px solid var(--border); border-radius: 999px; padding: .5rem .7rem; background: var(--panel); text-transform: capitalize; }
+.service-health-item > div { display: grid; gap: .1rem; }
+.service-health-item small { color: var(--muted); max-width: 18rem; white-space: normal; }
+.service-health-strip.rich { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.service-health-strip.rich .service-health-item { border-radius: 1rem; align-items: flex-start; min-width: 0; }
+.health-healthy .health-badge-dot { background: #78c58b; }
+.health-degraded .health-badge-dot, .health-stale .health-badge-dot { background: #e8ad45; }
+.health-failed .health-badge-dot { background: #dc756d; }
+.health-unknown .health-badge-dot, .health-not_configured .health-badge-dot, .health-disabled .health-badge-dot { background: #8f918e; }
+.engine-run-alert { display: flex; justify-content: space-between; gap: 1rem; border: 1px solid var(--border); border-radius: 1rem; padding: 1rem; }
+.engine-run-alert.failed { border-color: rgba(220,117,109,.55); }
+.engine-run-alert.partial { border-color: rgba(232,173,69,.55); }
+.run-id { color: var(--muted); overflow-wrap: anywhere; }
+.engine-stage-list { display: grid; gap: .45rem; margin: .8rem 0 0; padding: 0; list-style: none; }
+.engine-stage-list li { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--border); padding: .45rem 0; text-transform: capitalize; }
+.engine-run-history { display: grid; gap: .6rem; }
+.engine-run-history details { border: 1px solid var(--border); border-radius: .8rem; padding: .75rem; }
+.engine-run-history summary { cursor: pointer; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .75rem; }
+.run-status { border-radius: 999px; padding: .25rem .5rem; text-transform: capitalize; }
+.engine-error-copy { overflow-wrap: anywhere; }
+
+@media (max-width: 1100px) {
+  .service-health-strip.rich { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .engine-run-alert { flex-direction: column; }
+}
+
+@media (max-width: 600px) {
+  .service-health-strip.rich { display: flex; overflow-x: auto; }
+  .service-health-strip.rich .service-health-item { min-width: 14rem; }
+  .engine-run-history summary { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 920px) {
   .app-shell {
     grid-template-columns: 1fr;

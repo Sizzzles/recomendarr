@@ -1,104 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getConfig } from '@/lib/config';
-import { getDatabase, getFeedbackProfile, getLogs, getRecommendationCounts } from '@/lib/database';
+import { getDatabase, getFeedbackProfile, getRecommendationCounts } from '@/lib/database';
 import { getSchedulerSnapshot } from '@/lib/scheduler';
-import type { LogEntry } from '@/lib/types';
-
-type RunSource = 'manual' | 'scheduled' | 'unknown';
-
-function parseDetails(details?: string) {
-    if (!details) return null;
-    try {
-        return JSON.parse(details) as Record<string, unknown>;
-    } catch {
-        return null;
-    }
-}
-
-function extractNumber(message: string, pattern: RegExp): number {
-    const match = message.match(pattern);
-    return match ? Number(match[1]) : 0;
-}
-
-function getLatestRunWindow(logs: LogEntry[]) {
-    const engineLogs = logs.filter((log) => log.source === 'engine');
-    const runWindow: LogEntry[] = [];
-
-    for (const log of engineLogs) {
-        runWindow.push(log);
-        const details = parseDetails(log.details);
-        if (details?.event === 'run_start' || log.message.includes('Starting recommendation engine run')) {
-            break;
-        }
-    }
-
-    return runWindow.reverse();
-}
-
-function getLastRunSummary(logs: LogEntry[]) {
-    const runWindow = getLatestRunWindow(logs);
-    if (runWindow.length === 0) {
-        return null;
-    }
-
-    const summary = {
-        timestamp: runWindow[runWindow.length - 1]?.timestamp || new Date().toISOString(),
-        source: 'unknown' as RunSource,
-        watched: 0,
-        tmdbRecommendations: 0,
-        aiRecommendations: 0,
-        filtered: 0,
-        totalNew: 0,
-        addedToArr: 0,
-        errors: 0,
-    };
-
-    for (const log of runWindow) {
-        const details = parseDetails(log.details);
-        if (details?.source === 'manual' || details?.source === 'scheduled') {
-            summary.source = details.source;
-        }
-
-        if (details?.event === 'run_complete') {
-            summary.totalNew = Number(details.totalNew || 0);
-            summary.addedToArr = Number(details.addedToArr || 0);
-            summary.errors = Number(details.errors || 0);
-            summary.timestamp = log.timestamp;
-            continue;
-        }
-
-        if (log.message.includes('watched items')) {
-            summary.watched = extractNumber(log.message, /Found (\d+) watched items/);
-        }
-        if (log.message.includes('TMDb found')) {
-            summary.tmdbRecommendations = extractNumber(log.message, /TMDb found (\d+) recommendations/);
-        }
-        if (log.message.includes('AI generated')) {
-            summary.aiRecommendations = extractNumber(log.message, /AI generated (\d+) recommendations/);
-        }
-        if (log.message.includes('new unique recommendations')) {
-            summary.filtered = extractNumber(log.message, /Saved (\d+) new unique recommendations/);
-        }
-
-        const completionMatch = log.message.match(/Run complete(?: \((manual|scheduled)\))?: (\d+) new recommendations, (\d+) added/);
-        if (completionMatch) {
-            summary.source = (completionMatch[1] as RunSource | undefined) || summary.source;
-            summary.totalNew = Number(completionMatch[2]);
-            summary.addedToArr = Number(completionMatch[3]);
-            summary.timestamp = log.timestamp;
-        }
-    }
-
-    if (summary.errors === 0) {
-        summary.errors = runWindow.filter((log) => log.level === 'ERROR').length;
-    }
-
-    return {
-        ...summary,
-        candidates: summary.tmdbRecommendations + summary.aiRecommendations,
-        status: summary.errors > 0 ? (summary.totalNew > 0 ? 'warning' : 'error') : 'success',
-    };
-}
+import { getRecentEngineRuns } from '@/lib/engine-runs';
 
 export async function GET() {
     try {
@@ -106,8 +10,20 @@ export async function GET() {
         const config = getConfig();
         const counts = getRecommendationCounts();
         const feedbackProfile = getFeedbackProfile();
-        const logs = getLogs(undefined, 250, 0);
-        const lastRun = getLastRunSummary(logs);
+        const durableRun = getRecentEngineRuns(1)[0] || null;
+        const lastRun = durableRun ? {
+            timestamp: durableRun.completedAt || durableRun.startedAt,
+            source: durableRun.trigger,
+            watched: durableRun.summary.watchedItemsProcessed,
+            tmdbRecommendations: durableRun.summary.tmdbCandidates,
+            aiRecommendations: durableRun.summary.aiCandidates,
+            filtered: durableRun.summary.recommendationsSaved,
+            totalNew: durableRun.summary.recommendationsSaved,
+            addedToArr: durableRun.summary.addedToArr,
+            errors: durableRun.summary.errorCount,
+            candidates: durableRun.summary.candidatesConsidered,
+            status: durableRun.status === 'succeeded' ? 'success' : durableRun.status === 'partial' ? 'warning' : 'error',
+        } : null;
         const scheduler = getSchedulerSnapshot();
 
         const newRecommendationsThisWeek = (

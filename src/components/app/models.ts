@@ -1,4 +1,13 @@
 import type { FeedbackProfile, FeedbackReason } from '@/lib/types';
+import type { EffectiveServiceHealth, EngineRun } from '@/lib/engine-observability-types';
+
+export interface EngineObservabilityState {
+    activeRun: EngineRun | null;
+    latestRun: EngineRun | null;
+    lastSuccessfulRun: EngineRun | null;
+    runs: EngineRun[];
+    services: EffectiveServiceHealth[];
+}
 
 export type Page = 'dashboard' | 'recommendations' | 'library' | 'logs' | 'settings';
 export type RecommendationFilter = 'all' | 'pending' | 'not_now' | 'watched' | 'rejected';

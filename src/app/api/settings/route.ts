@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAllSavedSettings, saveSettings, isSetupComplete, getConfig } from '@/lib/config';
 import { getSchedulerSnapshot, syncRecommendationScheduler } from '@/lib/scheduler';
 import cron from 'node-cron';
+import { changedHealthServices } from '@/lib/service-health-observer';
+import { clearServiceHealth } from '@/lib/service-health';
 
 // GET /api/settings — returns current config and setup status
 export async function GET() {
@@ -109,6 +111,10 @@ export async function PUT(request: NextRequest) {
         }
 
         saveSettings(normalized);
+        const resultingSettings = { ...savedSettings, ...normalized };
+        for (const service of changedHealthServices(savedSettings, resultingSettings)) {
+            clearServiceHealth(service);
+        }
         syncRecommendationScheduler();
 
         return NextResponse.json({ success: true, saved: Object.keys(normalized).length });

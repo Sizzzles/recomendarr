@@ -218,6 +218,40 @@ function runDatabaseMigrations(db: Database.Database) {
             WHERE status = 'rejected' AND feedback_reason = 'already_watched'
         `).run();
     });
+
+    runMigration(db, 'migration_add_engine_observability_v1', () => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS engine_runs (
+            id TEXT PRIMARY KEY,
+            trigger TEXT NOT NULL CHECK(trigger IN ('manual', 'scheduled')),
+            source TEXT,
+            engine_version TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'partial', 'failed', 'interrupted')),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            current_stage TEXT NOT NULL,
+            summary_json TEXT NOT NULL,
+            stages_json TEXT NOT NULL,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_engine_runs_started
+            ON engine_runs(started_at DESC, id DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_engine_runs_one_running
+            ON engine_runs(status) WHERE status = 'running';
+
+          CREATE TABLE IF NOT EXISTS service_health (
+            service TEXT PRIMARY KEY CHECK(service IN ('media_server', 'tmdb', 'ai', 'sonarr', 'radarr')),
+            state TEXT NOT NULL CHECK(state IN ('healthy', 'degraded', 'failed')),
+            checked_at TEXT NOT NULL,
+            message TEXT,
+            source TEXT NOT NULL CHECK(source IN ('connection_test', 'engine', 'arr_operation', 'plex_sign_in')),
+            updated_at TEXT NOT NULL
+          );
+        `);
+    });
 }
 
 function runMigration(db: Database.Database, key: string, migration: () => void) {
@@ -275,7 +309,7 @@ function resetExpiredNotNowRecommendations(db: Database.Database) {
 
 // ---- Recommendation CRUD ----
 
-export function addRecommendation(rec: Recommendation): Recommendation {
+export function addRecommendationWithResult(rec: Recommendation): { recommendation: Recommendation; inserted: boolean } {
     const db = getDatabase();
     const id = rec.id || crypto.randomUUID();
 
@@ -284,7 +318,7 @@ export function addRecommendation(rec: Recommendation): Recommendation {
         const existing = db.prepare(
             'SELECT id FROM recommendations WHERE tmdb_id = ? AND media_type = ?'
         ).get(rec.tmdbId, rec.mediaType) as { id: string } | undefined;
-        if (existing) return { ...rec, id: existing.id };
+        if (existing) return { recommendation: { ...rec, id: existing.id }, inserted: false };
     }
 
     db.prepare(`
@@ -302,7 +336,11 @@ export function addRecommendation(rec: Recommendation): Recommendation {
         rec.status
     );
 
-    return { ...rec, id };
+    return { recommendation: { ...rec, id }, inserted: true };
+}
+
+export function addRecommendation(rec: Recommendation): Recommendation {
+    return addRecommendationWithResult(rec).recommendation;
 }
 
 function recommendationQueryParts(query: RecommendationQuery) {

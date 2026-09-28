@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     getConfigWithOverrides: vi.fn(),
+    getConfig: vi.fn(), recordServiceHealth: vi.fn(),
     createMediaServerConnector: vi.fn(),
     testSonarrConnection: vi.fn(), getSonarrQualityProfiles: vi.fn(), getSonarrRootFolders: vi.fn(),
     testRadarrConnection: vi.fn(), getRadarrQualityProfiles: vi.fn(), getRadarrRootFolders: vi.fn(),
     testAiConnection: vi.fn(), sendTestNotification: vi.fn(), axiosGet: vi.fn(),
 }));
 
-vi.mock('@/lib/config', () => ({ getConfigWithOverrides: mocks.getConfigWithOverrides }));
+vi.mock('@/lib/config', () => ({ getConfigWithOverrides: mocks.getConfigWithOverrides, getConfig: mocks.getConfig }));
+vi.mock('@/lib/service-health', () => ({ recordServiceHealth: mocks.recordServiceHealth }));
+vi.mock('@/lib/service-health-observer', async () => import('../src/lib/service-health-observer'));
 vi.mock('@/lib/media-server', () => ({ createMediaServerConnector: mocks.createMediaServerConnector }));
 vi.mock('@/lib/sonarr', () => ({
     testSonarrConnection: mocks.testSonarrConnection,
@@ -46,6 +49,7 @@ describe('connection test API', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.getConfigWithOverrides.mockReturnValue(baseConfig());
+        mocks.getConfig.mockReturnValue(baseConfig());
         mocks.createMediaServerConnector.mockReturnValue({
             testConnection: vi.fn().mockResolvedValue(true),
             getUsers: vi.fn().mockResolvedValue([{ id: '1', name: 'Primary' }]),
@@ -70,6 +74,16 @@ describe('connection test API', () => {
         const body = await response.json();
         expect(response.status).toBe(200);
         expect(body).toMatchObject({ success: true, message });
+    });
+
+    it('persists health only when the tested configuration matches saved settings', async () => {
+        await POST(request({ service: 'tmdb', settings: {} }));
+        expect(mocks.recordServiceHealth).toHaveBeenCalledWith(expect.objectContaining({ service: 'tmdb', state: 'healthy' }));
+
+        mocks.recordServiceHealth.mockClear();
+        mocks.getConfigWithOverrides.mockReturnValue({ ...baseConfig(), tmdb: { baseUrl: 'https://other', apiKey: 'different' } });
+        await POST(request({ service: 'tmdb', settings: { tmdb_api_key: 'different' } }));
+        expect(mocks.recordServiceHealth).not.toHaveBeenCalled();
     });
 
     it('preserves safe discovery collections and exposes only allowlisted details', async () => {

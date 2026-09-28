@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
     getAllSavedSettings: vi.fn(), saveSettings: vi.fn(), isSetupComplete: vi.fn(), getConfig: vi.fn(),
     syncRecommendationScheduler: vi.fn(), getSchedulerSnapshot: vi.fn(),
+    clearServiceHealth: vi.fn(),
 }));
 vi.mock('../src/lib/config', () => ({
     getAllSavedSettings: mocks.getAllSavedSettings, saveSettings: mocks.saveSettings,
@@ -21,6 +22,8 @@ vi.mock('@/lib/scheduler', () => ({
     getSchedulerSnapshot: mocks.getSchedulerSnapshot,
 }));
 vi.mock('node-cron', () => ({ default: { validate: () => true } }));
+vi.mock('@/lib/service-health', () => ({ clearServiceHealth: mocks.clearServiceHealth }));
+vi.mock('@/lib/service-health-observer', async () => import('../src/lib/service-health-observer'));
 
 import { GET, PUT } from '../src/app/api/settings/route';
 
@@ -64,6 +67,7 @@ describe('settings API Plex token handling', () => {
         }) as never);
         expect(response.status).toBe(200);
         expect(mocks.saveSettings).toHaveBeenCalledWith({ sonarr_url: 'http://new-sonarr' });
+        expect(mocks.clearServiceHealth).toHaveBeenCalledWith('sonarr');
     });
 
     it('does not overwrite a reconnected Plex token with its previous mask', async () => {

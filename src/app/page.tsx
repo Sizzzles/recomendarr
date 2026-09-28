@@ -12,6 +12,7 @@ import type {
     ConnectionResult,
     Counts,
     EngineFilterState,
+    EngineObservabilityState,
     Page,
     RecommendationFilter,
 } from '@/components/app/models';
@@ -21,6 +22,8 @@ import type { RecommendationSort } from '@/lib/recommendation-query';
 import type { LogEntry, Recommendation } from '@/lib/types';
 import type { RecommendationStatus } from '@/lib/types';
 import { beginOptimisticTransition, matchesQueueSearch, reconcileRecommendation } from '@/components/app/queue-optimistic';
+import { ServiceHealthStrip } from '@/components/app/service-health-strip';
+import { getPollingIntervals } from '@/components/app/engine-observability-model';
 
 const RECOMMENDATION_PAGE_SIZE = 24;
 const EMPTY_COUNTS: Counts = { pending: 0, approved: 0, rejected: 0, added: 0, not_now: 0, watched: 0, total: 0 };
@@ -79,6 +82,7 @@ function HomeContent() {
     const [matchingCount, setMatchingCount] = useState(0);
     const recommendationRequest = useRef(0);
     const mutationLock = useRef(new Set<string>());
+    const observabilityRequests = useRef({ status: false, health: false, history: false });
     const reloadCollectionRef = useRef<(options: { reset: boolean; offset: number }) => Promise<void>>(async () => {});
     const [logFilter, setLogFilter] = useState('all');
     const [isRunning, setIsRunning] = useState(false);
@@ -89,6 +93,9 @@ function HomeContent() {
     const [recOffset, setRecOffset] = useState(0);
     const [toasts, setToasts] = useState<Array<{ id: number; msg: string; type: string }>>([]);
     const [dashboardSummary, setDashboardSummary] = useState(EMPTY_DASHBOARD_SUMMARY);
+    const [observability, setObservability] = useState<EngineObservabilityState>({
+        activeRun: null, latestRun: null, lastSuccessfulRun: null, runs: [], services: [],
+    });
 
     const [modalRec, setModalRec] = useState<Recommendation | null>(null);
     const [bulkModalRecs, setBulkModalRecs] = useState<Recommendation[]>([]);
@@ -244,13 +251,38 @@ function HomeContent() {
     }, [logFilter]);
 
     const checkEngine = useCallback(async () => {
+        if (observabilityRequests.current.status) return;
+        observabilityRequests.current.status = true;
         try {
-            const response = await fetch('/api/engine');
+            const response = await fetch('/api/engine/status', { cache: 'no-store' });
             const data = await response.json();
-            setIsRunning(Boolean(data.running));
+            setIsRunning(Boolean(data.activeRun));
+            setObservability(prev => ({ ...prev, activeRun: data.activeRun, latestRun: data.latestRun, lastSuccessfulRun: data.lastSuccessfulRun }));
         } catch {
             // silent fetch failure
-        }
+        } finally { observabilityRequests.current.status = false; }
+    }, []);
+
+    const fetchRunHistory = useCallback(async () => {
+        if (observabilityRequests.current.history) return;
+        observabilityRequests.current.history = true;
+        try {
+            const response = await fetch('/api/engine/runs?limit=10', { cache: 'no-store' });
+            const data = await response.json();
+            setObservability(prev => ({ ...prev, runs: data.runs || [] }));
+        } catch { /* retain last known run history */ }
+        finally { observabilityRequests.current.history = false; }
+    }, []);
+
+    const fetchServiceHealth = useCallback(async () => {
+        if (observabilityRequests.current.health) return;
+        observabilityRequests.current.health = true;
+        try {
+            const response = await fetch('/api/service-health', { cache: 'no-store' });
+            const data = await response.json();
+            setObservability(prev => ({ ...prev, services: data.services || [] }));
+        } catch { /* retain last known health */ }
+        finally { observabilityRequests.current.health = false; }
     }, []);
 
     useEffect(() => {
@@ -262,8 +294,28 @@ function HomeContent() {
 
     useEffect(() => {
         if (!setupComplete) return;
-        void Promise.all([fetchPendingPreview(), fetchDashboardSummary(), checkEngine()]);
-    }, [checkEngine, fetchDashboardSummary, fetchPendingPreview, setupComplete]);
+        void Promise.all([fetchPendingPreview(), fetchDashboardSummary(), checkEngine(), fetchRunHistory(), fetchServiceHealth()]);
+    }, [checkEngine, fetchDashboardSummary, fetchPendingPreview, fetchRunHistory, fetchServiceHealth, setupComplete]);
+
+    useEffect(() => {
+        if (!setupComplete) return;
+        let statusTimer: number | undefined;
+        let healthTimer: number | undefined;
+        let historyTimer: number | undefined;
+        const schedule = () => {
+            if (statusTimer) window.clearInterval(statusTimer);
+            if (healthTimer) window.clearInterval(healthTimer);
+            if (historyTimer) window.clearInterval(historyTimer);
+            const intervals = getPollingIntervals({ visible: document.visibilityState === 'visible', running: isRunning });
+            statusTimer = window.setInterval(() => void checkEngine(), intervals.status);
+            healthTimer = window.setInterval(() => void fetchServiceHealth(), intervals.health);
+            if (intervals.history !== null) historyTimer = window.setInterval(() => void fetchRunHistory(), intervals.history);
+        };
+        const visibility = () => { if (document.visibilityState === 'visible') void Promise.all([checkEngine(), fetchRunHistory(), fetchServiceHealth()]); schedule(); };
+        schedule();
+        document.addEventListener('visibilitychange', visibility);
+        return () => { if (statusTimer) clearInterval(statusTimer); if (healthTimer) clearInterval(healthTimer); if (historyTimer) clearInterval(historyTimer); document.removeEventListener('visibilitychange', visibility); };
+    }, [checkEngine, fetchRunHistory, fetchServiceHealth, isRunning, setupComplete]);
 
     useEffect(() => {
         const preferences = parseQueuePreferences(window.localStorage);
@@ -371,6 +423,7 @@ function HomeContent() {
             await Promise.all([
                 fetchPendingPreview(),
                 fetchDashboardSummary(),
+                checkEngine(), fetchRunHistory(), fetchServiceHealth(),
                 page === 'recommendations' || page === 'library'
                     ? loadRecommendationCollection({ reset: true, offset: 0 })
                     : Promise.resolve(),
@@ -378,7 +431,7 @@ function HomeContent() {
         } catch (error) {
             toast((error as Error).message, 'error');
         } finally {
-            setIsRunning(false);
+            await Promise.all([checkEngine(), fetchRunHistory(), fetchServiceHealth()]);
         }
     };
 
@@ -746,6 +799,7 @@ function HomeContent() {
             </aside>
 
             <main className="app-main">
+                {page !== 'dashboard' && <ServiceHealthStrip services={observability.services} />}
                 {page === 'dashboard' && (
                     <DashboardPage
                         summary={dashboardSummary}
@@ -755,6 +809,7 @@ function HomeContent() {
                         onOpenRecommendations={() => setPage('recommendations')}
                         engineFilters={engineFilters}
                         setEngineFilters={setEngineFilters}
+                        observability={observability}
                     />
                 )}
 

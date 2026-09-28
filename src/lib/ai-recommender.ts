@@ -53,7 +53,7 @@ Output format (JSON array):
 
 IMPORTANT: Return ONLY the JSON array, no other text or explanation.`;
 
-export async function generateTasteProfile(watchHistory: WatchedItem[]): Promise<TasteProfile | null> {
+export async function generateTasteProfile(watchHistory: WatchedItem[], throwOnError = false): Promise<TasteProfile | null> {
     const config = getConfig();
     if (!config.ai.enabled || !config.ai.apiKey) return null;
     const client = getClient();
@@ -90,6 +90,7 @@ export async function generateTasteProfile(watchHistory: WatchedItem[]): Promise
         return parsed;
     } catch (err) {
         addLog({ level: 'WARN', message: `Failed to generate Taste Profile: ${(err as Error).message}`, source: 'ai' });
+        if (throwOnError) throw err;
         return null;
     }
 }
@@ -108,7 +109,8 @@ export async function getAiRecommendations(
     maxRecommendations = 10,
     filters?: { genres?: string[]; language?: string; yearMin?: number; yearMax?: number; mediaType?: 'movie' | 'series' | 'all'; vibePrompt?: string; minRating?: number; providers?: number[] },
     rejectedTitles: string[] = [],
-    feedbackProfile?: FeedbackProfile
+    feedbackProfile?: FeedbackProfile,
+    throwOnError = false,
 ): Promise<Recommendation[]> {
     const config = getConfig();
     if (!config.ai.enabled || !config.ai.apiKey) {
@@ -207,6 +209,7 @@ ${filterInstructions ? 'Follow the filter constraints strictly.' : 'Recommend a 
         const content = response.choices[0]?.message?.content?.trim();
         if (!content) {
             addLog({ level: 'WARN', message: 'AI returned empty response', source: 'ai' });
+            if (throwOnError) throw new Error('AI returned an empty response');
             return [];
         }
 
@@ -242,6 +245,7 @@ ${filterInstructions ? 'Follow the filter constraints strictly.' : 'Recommend a 
             source: 'ai',
             details: (err as Error).stack,
         });
+        if (throwOnError) throw err;
         return [];
     }
 }

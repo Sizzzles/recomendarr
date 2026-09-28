@@ -89,26 +89,30 @@ export async function searchTmdb(title: string, type: 'movie' | 'tv'): Promise<T
 
 export async function getTmdbRecommendations(
     tmdbId: number,
-    type: 'movie' | 'tv'
+    type: 'movie' | 'tv',
+    throwOnError = false,
 ): Promise<TmdbResult[]> {
     try {
         const res = await getTmdbClient().get(`/${type}/${tmdbId}/recommendations`);
         return res.data.results || [];
     } catch (err) {
         addLog({ level: 'ERROR', message: `TMDb recommendations failed for ${type}/${tmdbId}: ${(err as Error).message}`, source: 'tmdb' });
+        if (throwOnError) throw err;
         return [];
     }
 }
 
 export async function getTmdbSimilar(
     tmdbId: number,
-    type: 'movie' | 'tv'
+    type: 'movie' | 'tv',
+    throwOnError = false,
 ): Promise<TmdbResult[]> {
     try {
         const res = await getTmdbClient().get(`/${type}/${tmdbId}/similar`);
         return res.data.results || [];
     } catch (err) {
         addLog({ level: 'ERROR', message: `TMDb similar failed for ${type}/${tmdbId}: ${(err as Error).message}`, source: 'tmdb' });
+        if (throwOnError) throw err;
         return [];
     }
 }
@@ -170,7 +174,8 @@ export function tmdbResultToRecommendation(
 
 export async function getRecommendationsForItem(
     item: WatchedItem,
-    maxPerItem = 5
+    maxPerItem = 5,
+    throwOnError = false,
 ): Promise<Recommendation[]> {
     const recommendations: Recommendation[] = [];
     const type = item.mediaType === 'movie' ? 'movie' : 'tv';
@@ -190,8 +195,8 @@ export async function getRecommendationsForItem(
 
     // Get both recommendations and similar
     const [recs, similar] = await Promise.all([
-        getTmdbRecommendations(tmdbId, type),
-        getTmdbSimilar(tmdbId, type),
+        getTmdbRecommendations(tmdbId, type, throwOnError),
+        getTmdbSimilar(tmdbId, type, throwOnError),
     ]);
 
     // Merge and deduplicate
@@ -234,7 +239,8 @@ export interface DiscoverFilters {
 
 export async function discoverByFilters(
     filters: DiscoverFilters,
-    maxResults = 20
+    maxResults = 20,
+    throwOnError = false,
 ): Promise<Recommendation[]> {
     const recommendations: Recommendation[] = [];
     const seen = new Set<string>();
@@ -315,6 +321,7 @@ export async function discoverByFilters(
             });
         } catch (err) {
             addLog({ level: 'ERROR', message: `TMDb discover (${type}) failed: ${(err as Error).message}`, source: 'tmdb' });
+            if (throwOnError) throw err;
         }
         }
     }
@@ -326,23 +333,25 @@ export async function discoverByFilters(
 // Advanced Discovery: Credits & Keywords
 // ============================================
 
-export async function getTmdbCredits(tmdbId: number, type: 'movie' | 'tv'): Promise<TmdbCredits | null> {
+export async function getTmdbCredits(tmdbId: number, type: 'movie' | 'tv', throwOnError = false): Promise<TmdbCredits | null> {
     try {
         const res = await getTmdbClient().get(`/${type}/${tmdbId}/credits`);
         return res.data;
-    } catch {
+    } catch (error) {
+        if (throwOnError) throw error;
         return null;
     }
 }
 
-export async function searchTmdbKeyword(query: string): Promise<number | null> {
+export async function searchTmdbKeyword(query: string, throwOnError = false): Promise<number | null> {
     try {
         const res = await getTmdbClient().get('/search/keyword', { params: { query, page: 1 } });
         if (res.data.results && res.data.results.length > 0) {
             return res.data.results[0].id;
         }
         return null;
-    } catch {
+    } catch (error) {
+        if (throwOnError) throw error;
         return null;
     }
 }
@@ -351,7 +360,8 @@ export async function discoverByKeywords(
     keywordIds: number[],
     type: 'movie' | 'series',
     maxResults = 5,
-    languages: string[] = []
+    languages: string[] = [],
+    throwOnError = false,
 ): Promise<Recommendation[]> {
     if (keywordIds.length === 0) return [];
     const t = type === 'movie' ? 'movie' : 'tv';
@@ -381,6 +391,7 @@ export async function discoverByKeywords(
             }
         } catch (err) {
             addLog({ level: 'ERROR', message: `TMDb keyword discover failed: ${(err as Error).message}`, source: 'tmdb' });
+            if (throwOnError) throw err;
         }
     }
 
@@ -392,7 +403,8 @@ export async function discoverByCrew(
     type: 'movie' | 'series',
     crewName: string,
     maxResults = 5,
-    languages: string[] = []
+    languages: string[] = [],
+    throwOnError = false,
 ): Promise<Recommendation[]> {
     const t = type === 'movie' ? 'movie' : 'tv';
     const recommendations: Recommendation[] = [];
@@ -420,6 +432,7 @@ export async function discoverByCrew(
             }
         } catch (err) {
             addLog({ level: 'ERROR', message: `TMDb crew discover failed: ${(err as Error).message}`, source: 'tmdb' });
+            if (throwOnError) throw err;
         }
     }
 

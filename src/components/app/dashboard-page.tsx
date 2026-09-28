@@ -2,9 +2,13 @@
 
 import type { Dispatch, SetStateAction } from 'react';
 import type { Recommendation } from '@/lib/types';
-import type { DashboardSummary, EngineFilterState } from './models';
+import type { DashboardSummary, EngineFilterState, EngineObservabilityState } from './models';
 import { HealthBadge } from './health-badge';
 import { buildFeedbackImpactSummary, formatDateTime, formatRelativeDate } from './utils';
+import { ServiceHealthStrip } from './service-health-strip';
+import { EngineRunStatus } from './engine-run-status';
+import { EngineRunHistory } from './engine-run-history';
+import { formatElapsed, prominentRunIssue } from './engine-observability-model';
 
 const GENRES = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western'];
 const PROVIDERS = [
@@ -24,6 +28,7 @@ interface DashboardPageProps {
     onOpenRecommendations: () => void;
     engineFilters: EngineFilterState;
     setEngineFilters: Dispatch<SetStateAction<EngineFilterState>>;
+    observability: EngineObservabilityState;
 }
 
 export function DashboardPage({
@@ -34,7 +39,10 @@ export function DashboardPage({
     onOpenRecommendations,
     engineFilters,
     setEngineFilters,
+    observability,
 }: DashboardPageProps) {
+    const prominentIssue = prominentRunIssue(observability.latestRun, observability.lastSuccessfulRun);
+    const failedStage = prominentIssue?.stages.find(stage => stage.status === 'failed');
     const toggleGenre = (genre: string) => {
         setEngineFilters((prev) => ({
             ...prev,
@@ -78,6 +86,15 @@ export function DashboardPage({
                 </div>
             </div>
 
+            <ServiceHealthStrip services={observability.services} rich />
+            {observability.activeRun && <EngineRunStatus run={observability.activeRun} />}
+            {prominentIssue && <section className={`engine-run-alert ${prominentIssue.status}`} role="alert">
+                <div><strong>{prominentIssue.status === 'failed' ? 'Engine run failed' : 'Engine run completed partially'}</strong>
+                    <p>{failedStage ? `${failedStage.name.replaceAll('_', ' ')}: ` : ''}{prominentIssue.errorMessage || 'One or more attempted operations did not complete.'}</p>
+                    <a href={`#run-${prominentIssue.id}`}>View run details</a></div>
+                <p className="run-id">Run ID: <code>{prominentIssue.id}</code> · {formatDateTime(prominentIssue.startedAt)}</p>
+            </section>}
+
             <div className="stats-grid upgraded">
                 <article className="stat-card warm">
                     <span className="stat-label">Next scheduled run</span>
@@ -85,12 +102,12 @@ export function DashboardPage({
                     <span className="stat-meta">{summary.automation.nextRun ? formatRelativeDate(summary.automation.nextRun) : 'Scheduler disabled'}</span>
                 </article>
                 <article className="stat-card blue">
-                    <span className="stat-label">Last run result</span>
+                    <span className="stat-label">Last successful run</span>
                     <strong className="stat-value small">
-                        {summary.lastRun ? `${summary.lastRun.totalNew} saved / ${summary.lastRun.addedToArr} added` : 'No completed runs'}
+                        {observability.lastSuccessfulRun ? `${observability.lastSuccessfulRun.summary.recommendationsSaved} recommendations saved` : 'No successful runs'}
                     </strong>
                     <span className="stat-meta">
-                        {summary.lastRun ? `${summary.lastRun.source} · ${formatRelativeDate(summary.lastRun.timestamp)}` : 'Run the engine to create a baseline'}
+                        {observability.lastSuccessfulRun ? `${formatRelativeDate(observability.lastSuccessfulRun.startedAt)} · ${formatElapsed(observability.lastSuccessfulRun.durationMs || 0)}` : 'Run the engine to create a baseline'}
                     </span>
                 </article>
                 <article className="stat-card green">
@@ -330,6 +347,7 @@ export function DashboardPage({
                     </section>
                 </div>
             </div>
+            <EngineRunHistory runs={observability.runs} />
         </div>
     );
 }

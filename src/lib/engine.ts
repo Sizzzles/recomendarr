@@ -3,10 +3,13 @@ import { getRecommendationsForItem, getTmdbExternalIds, searchTmdb, discoverByFi
 import { getAiRecommendations, generateTasteProfile, TasteProfile } from './ai-recommender';
 import { addMovieToRadarr, getAllRadarrMovies } from './radarr';
 import { addSeriesToSonarr, getAllSonarrSeries } from './sonarr';
-import { addRecommendation, addLog, getFeedbackProfile, getRecommendationById, getWatchedMediaSignalSets, syncWatchedMediaState, updateRecommendationStatus } from './database';
+import { addRecommendationWithResult, addLog, getFeedbackProfile, getRecommendationById, getWatchedMediaSignalSets, syncWatchedMediaState, updateRecommendationStatus } from './database';
 import { getConfig } from './config';
 import { notifyRunResult } from './notifications';
 import type { FeedbackProfile, Recommendation, WatchedItem } from './types';
+import { startEngineRun, type EngineRunTracker } from './engine-run-tracker';
+import { ServiceAttemptAccumulator } from './service-health-observer';
+import packageJson from '../../package.json';
 
 export interface EngineFilters {
     genres?: string[];
@@ -137,6 +140,8 @@ export async function runRecommendationEngine(
         throw new Error('Recommendation engine is already running');
     }
 
+    const runTracker: EngineRunTracker = startEngineRun(source, { engineVersion: packageJson.version });
+    const runId = runTracker.getRun().id;
     isRunning = true;
     const result: RunResult = {
         watchedCount: 0,
@@ -146,13 +151,16 @@ export async function runRecommendationEngine(
         addedToArr: 0,
         errors: [],
     };
+    let radarrHealth: ServiceAttemptAccumulator | null = null;
+    let sonarrHealth: ServiceAttemptAccumulator | null = null;
 
     try {
+        runTracker.startStage('preparing');
         addLog({
             level: 'INFO',
             message: `🚀 Starting recommendation engine run (${source})`,
             source: 'engine',
-            details: JSON.stringify({ event: 'run_start', source }),
+            details: JSON.stringify({ event: 'run_start', source, runId }),
         });
 
         // Step 0: Pre-fetch full Sonarr & Radarr libraries for duplicate checking
@@ -167,36 +175,55 @@ export async function runRecommendationEngine(
             watchedImdbIds: new Set<string>(),
         };
 
+        const cfg = getConfig();
+        const initialRadarr = { url: cfg.radarr.url, apiKey: cfg.radarr.apiKey };
+        const initialSonarr = { url: cfg.sonarr.url, apiKey: cfg.sonarr.apiKey };
+        radarrHealth = new ServiceAttemptAccumulator('radarr', 'engine', undefined, undefined, () => {
+            const current = getConfig().radarr; return current.url === initialRadarr.url && current.apiKey === initialRadarr.apiKey;
+        });
+        sonarrHealth = new ServiceAttemptAccumulator('sonarr', 'engine', undefined, undefined, () => {
+            const current = getConfig().sonarr; return current.url === initialSonarr.url && current.apiKey === initialSonarr.apiKey;
+        });
         try {
             const radarrMovies = await getAllRadarrMovies();
+            if (cfg.radarr.url && cfg.radarr.apiKey) { radarrHealth.recordSuccess(); runTracker.recordAttempt('preparing', 'success'); }
             for (const m of radarrMovies) {
                 if (m.tmdbId) library.radarrTmdbIds.add(m.tmdbId);
                 library.radarrTitles.add(m.title.toLowerCase());
             }
             addLog({ level: 'INFO', message: `📚 Loaded ${radarrMovies.length} movies from Radarr library`, source: 'engine' });
         } catch (err) {
+            if (cfg.radarr.url && cfg.radarr.apiKey) { radarrHealth.recordFailure('Could not load Radarr library'); runTracker.recordAttempt('preparing', 'failure', `Radarr library: ${(err as Error).message}`); }
             addLog({ level: 'WARN', message: `Could not load Radarr library: ${(err as Error).message}`, source: 'engine' });
         }
 
         try {
             const sonarrSeries = await getAllSonarrSeries();
+            if (cfg.sonarr.url && cfg.sonarr.apiKey) { sonarrHealth.recordSuccess(); runTracker.recordAttempt('preparing', 'success'); }
             for (const s of sonarrSeries) {
                 if (s.tvdbId) library.sonarrTvdbIds.add(s.tvdbId);
                 library.sonarrTitles.add(s.title.toLowerCase());
             }
             addLog({ level: 'INFO', message: `📚 Loaded ${sonarrSeries.length} series from Sonarr library`, source: 'engine' });
         } catch (err) {
+            if (cfg.sonarr.url && cfg.sonarr.apiKey) { sonarrHealth.recordFailure('Could not load Sonarr library'); runTracker.recordAttempt('preparing', 'failure', `Sonarr library: ${(err as Error).message}`); }
             addLog({ level: 'WARN', message: `Could not load Sonarr library: ${(err as Error).message}`, source: 'engine' });
         }
+        runTracker.completeStage('preparing');
 
         // Step 1: Fetch watch history
+        runTracker.startStage('syncing_watch_history');
         const connector = createMediaServerConnector();
+        const initialMedia = { ...cfg.mediaServer };
+        const mediaHealth = new ServiceAttemptAccumulator('media_server', 'engine', undefined, undefined, () => JSON.stringify(getConfig().mediaServer) === JSON.stringify(initialMedia));
         let watchHistory: WatchedItem[];
 
         try {
-            const cfg = getConfig();
             watchHistory = await connector.getWatchHistory(cfg.app.watchHistoryLimit);
+            mediaHealth.recordSuccess('Watch history query succeeded');
+            runTracker.recordAttempt('syncing_watch_history', 'success');
             result.watchedCount = watchHistory.length;
+            runTracker.updateSummary({ watchedItemsProcessed: watchHistory.length });
             // Add watched titles to the exclusion set
             for (const w of watchHistory) {
                 library.watchedTitles.add(w.title.toLowerCase());
@@ -211,22 +238,35 @@ export async function runRecommendationEngine(
             }
             addLog({ level: 'INFO', message: `📺 Found ${watchHistory.length} watched items`, source: 'engine' });
         } catch (err) {
+            mediaHealth.recordFailure('Watch history query failed');
+            mediaHealth.flush();
             const msg = `Failed to fetch watch history: ${(err as Error).message}`;
             result.errors.push(msg);
+            runTracker.recordAttempt('syncing_watch_history', 'failure', msg);
+            runTracker.completeStage('syncing_watch_history');
+            runTracker.finish({ coreCompleted: false });
             addLog({ level: 'ERROR', message: msg, source: 'engine' });
             return result;
         }
+        mediaHealth.flush();
+        runTracker.completeStage('syncing_watch_history');
 
         if (watchHistory.length === 0) {
+            for (const stage of ['building_context', 'discovering_candidates', 'ai_recommendations', 'processing_candidates', 'auto_adding'] as const) {
+                runTracker.skipStage(stage, 'No watch history was available');
+            }
+            runTracker.startStage('finishing');
+            runTracker.completeStage('finishing');
+            runTracker.finish({ coreCompleted: true });
             addLog({ level: 'WARN', message: 'No watch history found. Skipping.', source: 'engine' });
             return result;
         }
 
         // Step 2: Get TMDb recommendations
         const allTmdbRecs: Recommendation[] = [];
-        const cfg = getConfig();
         const maxPerItem = Math.ceil(cfg.app.maxRecommendationsPerRun / Math.min(watchHistory.length, 10));
 
+        runTracker.startStage('building_context');
         // Filter watch history by media type if filter is set
         let filteredHistory = watchHistory;
         if (filters?.mediaType && filters.mediaType !== 'all') {
@@ -250,6 +290,7 @@ export async function runRecommendationEngine(
         
         // Take top 10 from scored history
         const sampledItems = scoredHistory.slice(0, 10).map(s => s.item);
+        runTracker.updateSummary({ historyItemsSampled: sampledItems.length });
         addLog({ level: 'INFO', message: `🎲 Smart sampled ${sampledItems.length} items to generate baseline recommendations`, source: 'engine' });
 
         const preferredLanguages = filters?.language && filters.language !== 'all'
@@ -263,11 +304,19 @@ export async function runRecommendationEngine(
             });
         }
 
+        const feedbackProfile = getFeedbackProfile();
+        runTracker.completeStage('building_context');
+        runTracker.startStage('discovering_candidates');
+        const initialTmdbKey = cfg.tmdb.apiKey;
+        const tmdbHealth = new ServiceAttemptAccumulator('tmdb', 'engine', undefined, undefined, () => getConfig().tmdb.apiKey === initialTmdbKey);
         for (const item of sampledItems) {
             try {
-                const recs = await getRecommendationsForItem(item, maxPerItem);
+                const recs = await getRecommendationsForItem(item, maxPerItem, true);
+                tmdbHealth.recordSuccess(); runTracker.recordAttempt('discovering_candidates', 'success');
                 allTmdbRecs.push(...recs);
             } catch (err) {
+                tmdbHealth.recordFailure('TMDb recommendation query failed');
+                runTracker.recordAttempt('discovering_candidates', 'failure', `TMDb error for "${item.title}": ${(err as Error).message}`);
                 result.errors.push(`TMDb error for "${item.title}": ${(err as Error).message}`);
             }
         }
@@ -288,10 +337,13 @@ export async function runRecommendationEngine(
                     mediaType: filters?.mediaType,
                     minRating: filters?.minRating,
                     providers: filters?.providers,
-                }, cfg.app.maxRecommendationsPerRun);
+                }, cfg.app.maxRecommendationsPerRun, true);
                 allTmdbRecs.push(...discoverRecs);
+                tmdbHealth.recordSuccess(); runTracker.recordAttempt('discovering_candidates', 'success');
                 addLog({ level: 'INFO', message: `🔍 Filter discovery added ${discoverRecs.length} recommendations`, source: 'engine' });
             } catch (err) {
+                tmdbHealth.recordFailure('TMDb discovery query failed');
+                runTracker.recordAttempt('discovering_candidates', 'failure', `TMDb discover error: ${(err as Error).message}`);
                 result.errors.push(`TMDb discover error: ${(err as Error).message}`);
             }
         }
@@ -303,39 +355,50 @@ export async function runRecommendationEngine(
         try {
             const topMovies = scoredHistory.filter(s => s.item.mediaType === 'movie' && s.item.tmdbId).slice(0, 2);
             for (const s of topMovies) {
-                const credits = await getTmdbCredits(s.item.tmdbId!, 'movie');
+                const credits = await getTmdbCredits(s.item.tmdbId!, 'movie', true);
                 if (credits && credits.crew) {
                     const director = credits.crew.find((crewMember) => crewMember.job === 'Director');
                     if (director) {
                         addLog({ level: 'INFO', message: `🎬 Creator Following: Discovering works by ${director.name} (from ${s.item.title})`, source: 'engine' });
-                        const directorRecs = await discoverByCrew(director.id, 'movie', director.name, 3, preferredLanguages);
+                        const directorRecs = await discoverByCrew(director.id, 'movie', director.name, 3, preferredLanguages, true);
+                        tmdbHealth.recordSuccess(); runTracker.recordAttempt('discovering_candidates', 'success');
                         allTmdbRecs.push(...directorRecs);
                     }
                 }
             }
         } catch (err) {
+            tmdbHealth.recordFailure('TMDb creator discovery failed');
+            runTracker.recordAttempt('discovering_candidates', 'failure', `Creator following error: ${(err as Error).message}`);
             result.errors.push(`Creator following error: ${(err as Error).message}`);
         }
 
-        const feedbackProfile = getFeedbackProfile();
-
         // Step 3: Get AI recommendations (with Taste Profile generation)
+        runTracker.startStage('ai_recommendations');
         let aiRecs: Recommendation[] = [];
         let tasteProfile: TasteProfile | null = null;
         const aiCfg = getConfig().ai;
-        if (aiCfg.enabled) {
+        if (aiCfg.enabled && aiCfg.providerUrl && aiCfg.model && aiCfg.apiKey) {
+            const initialAi = { ...aiCfg };
+            const aiHealth = new ServiceAttemptAccumulator('ai', 'engine', undefined, undefined, () => JSON.stringify(getConfig().ai) === JSON.stringify(initialAi));
             try {
                 addLog({ level: 'INFO', message: `🧠 Generating Taste Profile...`, source: 'engine' });
-                tasteProfile = await generateTasteProfile(watchHistory);
+                tasteProfile = await generateTasteProfile(watchHistory, true);
                 
                 const rejectedTitles = feedbackProfile.rejectedTitles;
 
-                aiRecs = await getAiRecommendations(watchHistory, tasteProfile, 10, filters, rejectedTitles, feedbackProfile);
+                aiRecs = await getAiRecommendations(watchHistory, tasteProfile, 10, filters, rejectedTitles, feedbackProfile, true);
+                aiHealth.recordSuccess(); runTracker.recordAttempt('ai_recommendations', 'success');
                 result.aiRecommendations = aiRecs.length;
                 addLog({ level: 'INFO', message: `🤖 AI generated ${aiRecs.length} recommendations`, source: 'engine' });
             } catch (err) {
+                aiHealth.recordFailure('AI recommendation request failed');
+                runTracker.recordAttempt('ai_recommendations', 'failure', `AI error: ${(err as Error).message}`);
                 result.errors.push(`AI error: ${(err as Error).message}`);
             }
+            aiHealth.flush();
+            runTracker.completeStage('ai_recommendations');
+        } else {
+            runTracker.skipStage('ai_recommendations', 'AI is disabled or not configured');
         }
 
         // Step 3b: Dynamic Keyword Discovery
@@ -344,29 +407,37 @@ export async function runRecommendationEngine(
                 addLog({ level: 'INFO', message: `🔍 Running dynamic keyword discovery for: ${tasteProfile.keywords.join(', ')}`, source: 'engine' });
                 const keywordIds: number[] = [];
                 for (const kw of tasteProfile.keywords) {
-                    const id = await searchTmdbKeyword(kw);
+                    const id = await searchTmdbKeyword(kw, true);
                     if (id) keywordIds.push(id);
                 }
                 if (keywordIds.length > 0) {
-                    const kwMovieRecs = await discoverByKeywords(keywordIds, 'movie', 5, preferredLanguages);
-                    const kwTvRecs = await discoverByKeywords(keywordIds, 'series', 5, preferredLanguages);
+                    const kwMovieRecs = await discoverByKeywords(keywordIds, 'movie', 5, preferredLanguages, true);
+                    const kwTvRecs = await discoverByKeywords(keywordIds, 'series', 5, preferredLanguages, true);
                     allTmdbRecs.push(...kwMovieRecs, ...kwTvRecs);
+                    tmdbHealth.recordSuccess(); runTracker.recordAttempt('discovering_candidates', 'success');
                     addLog({ level: 'INFO', message: `🔍 Keyword discovery added ${kwMovieRecs.length + kwTvRecs.length} recommendations`, source: 'engine' });
                 }
             } catch (err) {
+                tmdbHealth.recordFailure('TMDb keyword discovery failed');
+                runTracker.recordAttempt('discovering_candidates', 'failure', `Keyword discovery error: ${(err as Error).message}`);
                 result.errors.push(`Keyword discovery error: ${(err as Error).message}`);
             }
         }
+        tmdbHealth.flush();
+        runTracker.completeStage('discovering_candidates');
+        runTracker.recordCandidateCounts({ tmdbCandidates: allTmdbRecs.length, aiCandidates: aiRecs.length });
 
         // Step 4: Merge, deduplicate, and save
+        runTracker.startStage('processing_candidates');
         const allRecs = [...allTmdbRecs, ...aiRecs]
             .toSorted((a, b) => scoreRecommendation(b, feedbackProfile, preferredLanguages) - scoreRecommendation(a, feedbackProfile, preferredLanguages));
         const seen = new Set<string>();
         const uniqueRecs: Recommendation[] = [];
+        const newlySavedCandidates = new Set<Recommendation>();
 
         for (const rec of allRecs) {
             const key = rec.tmdbId ? `tmdb:${rec.tmdbId}` : `title:${rec.title.toLowerCase()}`;
-            if (seen.has(key)) continue;
+            if (seen.has(key)) { runTracker.recordCandidateDisposition('duplicate'); continue; }
             seen.add(key);
 
             // Resolve missing metadata (poster, overview, genres) via TMDb
@@ -448,12 +519,15 @@ export async function runRecommendationEngine(
             if (library.watchedTitles.has(titleLower) || (rec.imdbId && library.watchedImdbIds.has(rec.imdbId.toLowerCase()))) {
                 alreadyExists = true;
             }
-            if (feedbackProfile.rejectedTitles.includes(titleLower)) {
-                alreadyExists = true;
+            if (alreadyExists) {
+                runTracker.recordCandidateDisposition('existing_or_watched');
+                addLog({ level: 'DEBUG', message: `Skipping "${rec.title}" — already in library or watched`, source: 'engine' });
+                continue;
             }
 
-            if (alreadyExists) {
-                addLog({ level: 'DEBUG', message: `Skipping "${rec.title}" — already in library or watched`, source: 'engine' });
+            if (feedbackProfile.rejectedTitles.includes(titleLower)) {
+                runTracker.recordCandidateDisposition('rejected_title');
+                addLog({ level: 'DEBUG', message: `Skipping "${rec.title}" â€” explicitly rejected`, source: 'engine' });
                 continue;
             }
 
@@ -464,12 +538,14 @@ export async function runRecommendationEngine(
                     const recGenres = (rec.genres || []).map(g => g.toLowerCase());
                     const matchesGenre = filters.genres.some((fg: string) => recGenres.includes(fg.toLowerCase()));
                     if (!matchesGenre) {
+                        runTracker.recordCandidateDisposition('user_filter');
                         addLog({ level: 'DEBUG', message: `Filtered out "${rec.title}" — does not match genre filter`, source: 'engine' });
                         continue;
                     }
                 }
                 if (filters.language && filters.language !== 'all') {
                     if (!rec.language || rec.language.toLowerCase() !== filters.language.toLowerCase()) {
+                        runTracker.recordCandidateDisposition('user_filter');
                         addLog({ level: 'DEBUG', message: `Filtered out "${rec.title}" — language ${rec.language} doesn't match filter ${filters.language}`, source: 'engine' });
                         continue;
                     }
@@ -478,25 +554,31 @@ export async function runRecommendationEngine(
                 // Year range filter
                 if (rec.year) {
                     if (filters.yearMin && rec.year < filters.yearMin) {
+                        runTracker.recordCandidateDisposition('user_filter');
                         addLog({ level: 'DEBUG', message: `Filtered out "${rec.title}" (${rec.year}) — before year range`, source: 'engine' });
                         continue;
                     }
                     if (filters.yearMax && rec.year > filters.yearMax) {
+                        runTracker.recordCandidateDisposition('user_filter');
                         addLog({ level: 'DEBUG', message: `Filtered out "${rec.title}" (${rec.year}) — after year range`, source: 'engine' });
                         continue;
                     }
                 }
                 // Media type filter
                 if (filters.mediaType && filters.mediaType !== 'all' && rec.mediaType !== filters.mediaType) {
+                    runTracker.recordCandidateDisposition('user_filter');
                     addLog({ level: 'DEBUG', message: `Filtered out "${rec.title}" — type ${rec.mediaType} doesn't match filter ${filters.mediaType}`, source: 'engine' });
                     continue;
                 }
             }
 
             // Save to DB
-            addRecommendation(rec);
+            const saved = addRecommendationWithResult(rec);
+            runTracker.recordCandidateDisposition(saved.inserted ? 'saved' : 'existing_or_watched');
+            if (saved.inserted) newlySavedCandidates.add(rec);
             uniqueRecs.push(rec);
         }
+        runTracker.completeStage('processing_candidates');
 
         result.totalNew = uniqueRecs.length;
         addLog({ level: 'INFO', message: `💾 Saved ${uniqueRecs.length} new unique recommendations`, source: 'engine' });
@@ -504,28 +586,50 @@ export async function runRecommendationEngine(
         // Step 5: Auto-add if configured
         const schedulerCfg = getConfig().scheduler;
         if (schedulerCfg.autoAdd) {
+            runTracker.startStage('auto_adding');
+            let applicableAutoAddAttempts = 0;
             for (const rec of uniqueRecs) {
                 try {
                     if (rec.mediaType === 'movie' && rec.tmdbId) {
+                        if (!cfg.radarr.url || !cfg.radarr.apiKey) continue;
+                        applicableAutoAddAttempts += 1;
+                        if (newlySavedCandidates.has(rec)) runTracker.updateSummary({ autoAddAttempted: runTracker.getRun().summary.autoAddAttempted + 1 });
                         const res = await addMovieToRadarr(rec.tmdbId);
                         if (res.success) {
+                            radarrHealth.recordSuccess('Radarr operation succeeded');
+                            runTracker.recordAttempt('auto_adding', 'success');
                             updateRecommendationStatus(rec.id!, 'added');
                             result.addedToArr++;
-                        }
+                            runTracker.updateSummary({ addedToArr: result.addedToArr });
+                        } else { radarrHealth.recordFailure(res.message); runTracker.recordAttempt('auto_adding', 'failure', res.message); }
                     } else if (rec.mediaType === 'series' && rec.tvdbId) {
+                        if (!cfg.sonarr.url || !cfg.sonarr.apiKey) continue;
+                        applicableAutoAddAttempts += 1;
+                        if (newlySavedCandidates.has(rec)) runTracker.updateSummary({ autoAddAttempted: runTracker.getRun().summary.autoAddAttempted + 1 });
                         const res = await addSeriesToSonarr(rec.tvdbId);
                         if (res.success) {
+                            sonarrHealth.recordSuccess('Sonarr operation succeeded');
+                            runTracker.recordAttempt('auto_adding', 'success');
                             updateRecommendationStatus(rec.id!, 'added');
                             result.addedToArr++;
-                        }
+                            runTracker.updateSummary({ addedToArr: result.addedToArr });
+                        } else { sonarrHealth.recordFailure(res.message); runTracker.recordAttempt('auto_adding', 'failure', res.message); }
                     }
                 } catch (err) {
+                    if (rec.mediaType === 'movie') radarrHealth.recordFailure('Radarr add operation failed');
+                    else sonarrHealth.recordFailure('Sonarr add operation failed');
+                    runTracker.recordAttempt('auto_adding', 'failure', `Add error for "${rec.title}": ${(err as Error).message}`);
                     result.errors.push(`Add error for "${rec.title}": ${(err as Error).message}`);
                 }
             }
+            if (applicableAutoAddAttempts === 0) runTracker.skipStage('auto_adding', 'No applicable configured Arr service');
+            else runTracker.completeStage('auto_adding');
             addLog({ level: 'INFO', message: `📥 Auto-added ${result.addedToArr} items to Sonarr/Radarr`, source: 'engine' });
-        }
+        } else runTracker.skipStage('auto_adding', 'Automatic adding is disabled');
 
+        runTracker.startStage('finishing');
+        radarrHealth.flush();
+        sonarrHealth.flush();
         addLog({
             level: 'INFO',
             message: `✅ Run complete (${source}): ${result.totalNew} new recommendations, ${result.addedToArr} added`,
@@ -536,13 +640,21 @@ export async function runRecommendationEngine(
                 totalNew: result.totalNew,
                 addedToArr: result.addedToArr,
                 errors: result.errors.length,
+                runId,
             }),
         });
 
         await notifyRunResult(result, source);
+        runTracker.completeStage('finishing');
+        runTracker.finish({ coreCompleted: true });
 
         return result;
+    } catch (error) {
+        runTracker.finish({ coreCompleted: false, fatalError: (error as Error).message });
+        throw error;
     } finally {
+        radarrHealth?.flush();
+        sonarrHealth?.flush();
         isRunning = false;
     }
 }

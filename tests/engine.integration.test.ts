@@ -11,6 +11,23 @@ import type { AppConfig } from '../src/lib/config';
 import type { MediaServerConnector } from '../src/lib/media-server';
 import type { Recommendation, WatchedItem } from '../src/lib/types';
 
+vi.mock('../src/lib/engine-run-tracker', () => ({
+    startEngineRun: () => {
+        const run = { id: 'integration-run', summary: { autoAddAttempted: 0 } };
+        return {
+            getRun: () => run,
+            startStage: vi.fn(), completeStage: vi.fn(), skipStage: vi.fn(), recordAttempt: vi.fn(),
+            recordCandidateCounts: vi.fn(), recordCandidateDisposition: vi.fn(), finish: vi.fn(),
+            updateSummary: (patch: Record<string, number>) => Object.assign(run.summary, patch),
+        };
+    },
+}));
+vi.mock('../src/lib/service-health-observer', () => ({
+    ServiceAttemptAccumulator: class {
+        recordSuccess() {} recordFailure() {} flush() {}
+    },
+}));
+
 type SearchTmdbResult = NonNullable<Awaited<ReturnType<typeof tmdb.searchTmdb>>>;
 
 function createMockConnector(watchHistory: WatchedItem[] | Promise<WatchedItem[]>): MediaServerConnector {
@@ -59,6 +76,7 @@ describe('Engine Integration Tests (Hybrid Mocking)', () => {
 
             // Mock database deduplication layers
             vi.spyOn(database, 'addRecommendation').mockImplementation((r) => r);
+            vi.spyOn(database, 'addRecommendationWithResult').mockImplementation((r) => ({ recommendation: r, inserted: true }));
             vi.spyOn(database, 'updateRecommendationStatus').mockImplementation(() => true);
             vi.spyOn(database, 'syncWatchedMediaState').mockImplementation(() => {});
             vi.spyOn(database, 'getWatchedMediaSignalSets').mockReturnValue({

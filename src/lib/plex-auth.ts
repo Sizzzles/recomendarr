@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 import { randomUUID } from 'crypto';
 import { deleteSettings, getAllSavedSettings, saveSetting, saveSettings } from './config';
+import { clearServiceHealth, recordServiceHealth } from './service-health';
 
 const PLEX_PIN_URL = 'https://plex.tv/api/v2/pins';
 const PLEX_RESOURCES_URL = 'https://clients.plex.tv/api/v2/resources';
@@ -230,8 +231,18 @@ const service = createPlexAuthService({
 
 export const startPlexSignIn = service.startPlexSignIn;
 export const pollPlexSignIn = service.pollPlexSignIn;
-export const selectPlexServer = service.selectPlexServer;
-export const disconnectPlex = service.disconnectPlex;
+export async function selectPlexServer(flowId: string, serverId: string) {
+    clearServiceHealth('media_server');
+    const result = await service.selectPlexServer(flowId, serverId);
+    recordServiceHealth({ service: 'media_server', state: 'healthy', checkedAt: new Date().toISOString(), message: 'Plex sign-in connection succeeded', source: 'plex_sign_in' });
+    return result;
+}
+
+export async function disconnectPlex() {
+    const result = await service.disconnectPlex();
+    clearServiceHealth('media_server');
+    return result;
+}
 
 export function getPlexConnectionState() {
     const settings = getAllSavedSettings();
