@@ -30,4 +30,9 @@ describe('EngineRunHistory', () => {
         expect(markup).toContain('aria-label="syncing watch history details"');
         expect(markup).toContain('<li>Failed to fetch watch history: Plex Down</li>');
     });
+
+    it('marks a requested run open and handles an unavailable run gracefully', () => {
+        expect(renderToStaticMarkup(<EngineRunHistory runs={[failedRun()]} requestedRunId="failed-layout" />)).toContain('<details id="run-failed-layout" open=""');
+        expect(renderToStaticMarkup(<EngineRunHistory runs={[failedRun()]} requestedRunId="missing" />)).toContain('Requested run is no longer available');
+    });
 });

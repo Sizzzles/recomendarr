@@ -1,4 +1,4 @@
-import type { EngineRun } from '@/lib/engine-observability-types';
+import type { EffectiveServiceHealth, EngineRun } from '@/lib/engine-observability-types';
 
 export function getPollingIntervals(input: { visible: boolean; running: boolean }) {
     if (!input.visible) return { status: 10_000, health: 300_000, history: null };
@@ -35,4 +35,25 @@ export function primaryRunIssueStage(run: EngineRun): EngineRun['stages'][number
     }
     return run.stages.find(stage => stage.name === run.currentStage && stage.status === 'failed')
         || run.stages.find(stage => stage.status === 'failed');
+}
+
+export interface ServiceHealthIssue {
+    service: EffectiveServiceHealth['service'];
+    severity: 'failed' | 'degraded' | 'soft';
+    message: string;
+    state: EffectiveServiceHealth['state'];
+}
+
+export function currentServiceHealthIssue(services: EffectiveServiceHealth[]): ServiceHealthIssue | null {
+    const ranked = ['failed', 'degraded', 'stale', 'unknown'] as const;
+    for (const state of ranked) {
+        const service = services.find(item => item.state === state);
+        if (service) return {
+            service: service.service,
+            state: service.state,
+            severity: state === 'failed' ? 'failed' : state === 'degraded' ? 'degraded' : 'soft',
+            message: service.reason,
+        };
+    }
+    return null;
 }

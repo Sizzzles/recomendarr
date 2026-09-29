@@ -1,12 +1,23 @@
 'use client';
 
+import { useEffect } from 'react';
 import type { EngineRun } from '@/lib/engine-observability-types';
 import { formatElapsed } from './engine-observability-model';
 import { formatDateTime } from './utils';
 
-export function EngineRunHistory({ runs }: { runs: EngineRun[] }) {
+export function EngineRunHistory({ runs, requestedRunId = null }: { runs: EngineRun[]; requestedRunId?: string | null }) {
+    const requestedExists = !requestedRunId || runs.some(run => run.id === requestedRunId);
+    useEffect(() => {
+        if (!requestedRunId || !requestedExists) return;
+        const target = document.getElementById(`run-${requestedRunId}`);
+        if (!(target instanceof HTMLDetailsElement)) return;
+        target.open = true;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        target.focus({ preventScroll: true });
+    }, [requestedExists, requestedRunId, runs]);
     return <section className="settings-card"><div className="section-heading"><div><p className="section-kicker">Run history</p><h3>Last ten runs</h3></div></div>
-        <div className="engine-run-history">{runs.length ? runs.map(run => <details key={run.id} id={`run-${run.id}`}>
+        {requestedRunId && !requestedExists && <p className="inline-result failure" role="status">Requested run is no longer available in the last ten runs.</p>}
+        <div className="engine-run-history">{runs.length ? runs.map(run => <details key={run.id} id={`run-${run.id}`} open={run.id === requestedRunId} tabIndex={-1}>
             <summary><span className={`run-status status-${run.status}`}>{run.status}</span><strong>{formatDateTime(run.startedAt)}</strong>
                 <span>{run.trigger} · {run.durationMs === undefined ? 'Running' : formatElapsed(run.durationMs)} · {run.summary.recommendationsSaved} saved</span></summary>
             <p className="run-id">Run ID: <code>{run.id}</code> · Engine {run.engineVersion}</p>

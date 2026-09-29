@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createMediaServerConnector } from '@/lib/media-server';
-import { testSonarrConnection, getSonarrQualityProfiles, getSonarrRootFolders } from '@/lib/sonarr';
-import { testRadarrConnection, getRadarrQualityProfiles, getRadarrRootFolders } from '@/lib/radarr';
-import { testAiConnection } from '@/lib/ai-recommender';
+import { getSonarrQualityProfiles, getSonarrRootFolders } from '@/lib/sonarr';
+import { getRadarrQualityProfiles, getRadarrRootFolders } from '@/lib/radarr';
 import { getConfig, getConfigWithOverrides } from '@/lib/config';
 import { sendTestNotification } from '@/lib/notifications';
 import { configurationMatchesSavedService } from '@/lib/service-health-observer';
 import { recordServiceHealth } from '@/lib/service-health';
 import type { CoreService } from '@/lib/engine-observability-types';
+import { checkCoreService } from '../../../lib/service-health-check';
 
 const SERVICES = new Set(['mediaServer', 'sonarr', 'radarr', 'ai', 'tmdb', 'discord', 'telegram']);
 
@@ -42,8 +42,9 @@ export async function POST(request: Request) {
         case 'mediaServer': {
             const label = config.mediaServer.type === 'plex' ? 'Plex' : config.mediaServer.type === 'jellyfin' ? 'Jellyfin' : 'Emby';
             try {
+                const checked = await checkCoreService('media_server', config, false);
+                if (checked.state !== 'healthy') return observedFailure(`Could not connect to ${label}. Check the server URL and credentials.`, { users: [], type: config.mediaServer.type });
                 const connector = createMediaServerConnector(config.mediaServer);
-                if (!await connector.testConnection()) return observedFailure(`Could not connect to ${label}. Check the server URL and credentials.`, { users: [], type: config.mediaServer.type });
                 let users: { id: string; name: string }[] = [];
                 try { users = await connector.getUsers(); } catch { /* Connection remains valid. */ }
                 observe(true, 'Last query succeeded');
@@ -54,7 +55,7 @@ export async function POST(request: Request) {
         }
         case 'sonarr': {
             try {
-                if (!await testSonarrConnection(config.sonarr)) return observedFailure('Could not connect to Sonarr. Check the URL and API key.', { profiles: [], rootFolders: [] });
+                if ((await checkCoreService('sonarr', config, false)).state !== 'healthy') return observedFailure('Could not connect to Sonarr. Check the URL and API key.', { profiles: [], rootFolders: [] });
                 let profiles: { id: number; name: string }[] = [];
                 let rootFolders: { id: number; path: string; freeSpace?: number }[] = [];
                 try { profiles = await getSonarrQualityProfiles(config.sonarr); rootFolders = await getSonarrRootFolders(config.sonarr); } catch { /* Connection remains valid. */ }
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
         }
         case 'radarr': {
             try {
-                if (!await testRadarrConnection(config.radarr)) return observedFailure('Could not connect to Radarr. Check the URL and API key.', { profiles: [], rootFolders: [] });
+                if ((await checkCoreService('radarr', config, false)).state !== 'healthy') return observedFailure('Could not connect to Radarr. Check the URL and API key.', { profiles: [], rootFolders: [] });
                 let profiles: { id: number; name: string }[] = [];
                 let rootFolders: { id: number; path: string; freeSpace?: number }[] = [];
                 try { profiles = await getRadarrQualityProfiles(config.radarr); rootFolders = await getRadarrRootFolders(config.radarr); } catch { /* Connection remains valid. */ }
@@ -74,17 +75,16 @@ export async function POST(request: Request) {
         }
         case 'ai': {
             try {
-                if (!await testAiConnection(config.ai)) return observedFailure('Could not connect to the AI provider. Check the provider URL, model, and API key.');
+                if ((await checkCoreService('ai', config, false)).state !== 'healthy') return observedFailure('Could not connect to the AI provider. Check the provider URL, model, and API key.');
                 observe(true, 'Model query succeeded');
                 return NextResponse.json({ success: true, message: 'Connected to AI provider', details: { model: config.ai.model }, model: config.ai.model });
             } catch { return observedFailure('Could not connect to the AI provider. Check the provider URL, model, and API key.'); }
         }
         case 'tmdb': {
             try {
-                const axios = (await import('axios')).default;
-                const response = await axios.get(`${config.tmdb.baseUrl}/movie/550`, { params: { api_key: config.tmdb.apiKey } });
+                if ((await checkCoreService('tmdb', config, false)).state !== 'healthy') return observedFailure('Could not connect to TMDb. Check network access or the optional custom API key.');
                 observe(true, 'Last query succeeded');
-                return NextResponse.json({ success: true, message: 'Connected to TMDb', details: { sampleTitle: response.data.title }, movieTitle: response.data.title });
+                return NextResponse.json({ success: true, message: 'Connected to TMDb' });
             } catch { return observedFailure('Could not connect to TMDb. Check network access or the optional custom API key.'); }
         }
         case 'discord':

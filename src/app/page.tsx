@@ -24,6 +24,8 @@ import type { RecommendationStatus } from '@/lib/types';
 import { beginOptimisticTransition, matchesQueueSearch, reconcileRecommendation } from '@/components/app/queue-optimistic';
 import { ServiceHealthStrip } from '@/components/app/service-health-strip';
 import { clearActiveRunAfterStatusFailure, getPollingIntervals } from '@/components/app/engine-observability-model';
+import { LogsPage } from '@/components/app/logs-page';
+import { logsLocationForRun, parseObservabilityLocation, type LogsView } from '@/components/app/observability-navigation';
 
 const RECOMMENDATION_PAGE_SIZE = 24;
 const EMPTY_COUNTS: Counts = { pending: 0, approved: 0, rejected: 0, added: 0, not_now: 0, watched: 0, total: 0 };
@@ -85,6 +87,10 @@ function HomeContent() {
     const observabilityRequests = useRef({ status: false, health: false, history: false });
     const reloadCollectionRef = useRef<(options: { reset: boolean; offset: number }) => Promise<void>>(async () => {});
     const [logFilter, setLogFilter] = useState('all');
+    const [logsView, setLogsView] = useState<LogsView>('events');
+    const [requestedRunId, setRequestedRunId] = useState<string | null>(null);
+    const [checkingHealth, setCheckingHealth] = useState(false);
+    const [healthCheckMessage, setHealthCheckMessage] = useState<string | null>(null);
     const [isRunning, setIsRunning] = useState(false);
     const [loading] = useState(false);
     const [listLoading, setListLoading] = useState(false);
@@ -286,6 +292,35 @@ function HomeContent() {
         finally { observabilityRequests.current.health = false; }
     }, []);
 
+    const runHealthCheck = useCallback(async () => {
+        if (checkingHealth) return;
+        setCheckingHealth(true);
+        setHealthCheckMessage(null);
+        try {
+            const response = await fetch('/api/service-health/check', { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok) throw new Error('Health check failed');
+            await fetchServiceHealth();
+            const parts = [
+                data.summary?.healthy ? `${data.summary.healthy} healthy` : '',
+                data.summary?.degraded ? `${data.summary.degraded} degraded` : '',
+                data.summary?.failed ? `${data.summary.failed} failed` : '',
+                data.summary?.disabled ? `${data.summary.disabled} disabled` : '',
+                data.summary?.notConfigured ? `${data.summary.notConfigured} not configured` : '',
+            ].filter(Boolean);
+            setHealthCheckMessage(`Health check complete: ${parts.join(', ') || 'no applicable services'}`);
+        } catch {
+            setHealthCheckMessage('Health check could not be completed. Try again.');
+        } finally { setCheckingHealth(false); }
+    }, [checkingHealth, fetchServiceHealth]);
+
+    const openRunDetails = useCallback((runId: string) => {
+        window.history.pushState({ page: 'logs', view: 'runs', runId }, '', logsLocationForRun(runId));
+        setRequestedRunId(runId);
+        setLogsView('runs');
+        setPage('logs');
+    }, []);
+
     useEffect(() => {
         fetch('/api/settings')
             .then((response) => response.json())
@@ -295,8 +330,8 @@ function HomeContent() {
 
     useEffect(() => {
         if (!setupComplete) return;
-        void Promise.all([fetchPendingPreview(), fetchDashboardSummary(), checkEngine(), fetchRunHistory(), fetchServiceHealth()]);
-    }, [checkEngine, fetchDashboardSummary, fetchPendingPreview, fetchRunHistory, fetchServiceHealth, setupComplete]);
+        void Promise.all([fetchPendingPreview(), fetchDashboardSummary(), checkEngine(), fetchServiceHealth()]);
+    }, [checkEngine, fetchDashboardSummary, fetchPendingPreview, fetchServiceHealth, setupComplete]);
 
     useEffect(() => {
         if (!setupComplete) return;
@@ -310,13 +345,25 @@ function HomeContent() {
             const intervals = getPollingIntervals({ visible: document.visibilityState === 'visible', running: isRunning });
             statusTimer = window.setInterval(() => void checkEngine(), intervals.status);
             healthTimer = window.setInterval(() => void fetchServiceHealth(), intervals.health);
-            if (intervals.history !== null) historyTimer = window.setInterval(() => void fetchRunHistory(), intervals.history);
+            if (intervals.history !== null && page === 'logs' && logsView === 'runs') historyTimer = window.setInterval(() => void fetchRunHistory(), intervals.history);
         };
-        const visibility = () => { if (document.visibilityState === 'visible') void Promise.all([checkEngine(), fetchRunHistory(), fetchServiceHealth()]); schedule(); };
+        const visibility = () => { if (document.visibilityState === 'visible') void Promise.all([checkEngine(), fetchServiceHealth(), ...(page === 'logs' && logsView === 'runs' ? [fetchRunHistory()] : [])]); schedule(); };
         schedule();
         document.addEventListener('visibilitychange', visibility);
         return () => { if (statusTimer) clearInterval(statusTimer); if (healthTimer) clearInterval(healthTimer); if (historyTimer) clearInterval(historyTimer); document.removeEventListener('visibilitychange', visibility); };
-    }, [checkEngine, fetchRunHistory, fetchServiceHealth, isRunning, setupComplete]);
+    }, [checkEngine, fetchRunHistory, fetchServiceHealth, isRunning, logsView, page, setupComplete]);
+
+    useEffect(() => {
+        const applyLocation = () => {
+            const location = parseObservabilityLocation(window.location.href);
+            setPage(location.page);
+            setLogsView(location.view);
+            setRequestedRunId(location.runId);
+        };
+        applyLocation();
+        window.addEventListener('popstate', applyLocation);
+        return () => window.removeEventListener('popstate', applyLocation);
+    }, []);
 
     useEffect(() => {
         const preferences = parseQueuePreferences(window.localStorage);
@@ -349,9 +396,10 @@ function HomeContent() {
 
     useEffect(() => {
         if (page === 'logs' && setupComplete) {
-            void fetchLogs();
+            if (logsView === 'runs') void fetchRunHistory();
+            else void fetchLogs();
         }
-    }, [fetchLogs, page, setupComplete]);
+    }, [fetchLogs, fetchRunHistory, logsView, page, setupComplete]);
 
     useEffect(() => {
         if (!setupComplete) {
@@ -800,7 +848,7 @@ function HomeContent() {
             </aside>
 
             <main className="app-main">
-                {page !== 'dashboard' && <ServiceHealthStrip services={observability.services} />}
+                <ServiceHealthStrip services={observability.services} />
                 {page === 'dashboard' && (
                     <DashboardPage
                         summary={dashboardSummary}
@@ -811,6 +859,10 @@ function HomeContent() {
                         engineFilters={engineFilters}
                         setEngineFilters={setEngineFilters}
                         observability={observability}
+                        checkingHealth={checkingHealth}
+                        healthCheckMessage={healthCheckMessage}
+                        onCheckHealth={() => void runHealthCheck()}
+                        onViewRunDetails={openRunDetails}
                     />
                 )}
 
@@ -863,8 +915,12 @@ function HomeContent() {
                 {page === 'logs' && (
                     <LogsPage
                         logs={logs}
+                        runs={observability.runs}
+                        view={logsView}
+                        requestedRunId={requestedRunId}
                         logFilter={logFilter}
                         setLogFilter={setLogFilter}
+                        onViewChange={(view) => { setLogsView(view); setRequestedRunId(null); }}
                         onRefresh={fetchLogs}
                         onClear={clearLogs}
                     />
@@ -947,67 +1003,6 @@ function HomeContent() {
                     </div>
                 ))}
             </div>
-        </div>
-    );
-}
-
-function LogsPage({
-    logs,
-    logFilter,
-    setLogFilter,
-    onRefresh,
-    onClear,
-}: {
-    logs: LogEntry[];
-    logFilter: string;
-    setLogFilter: (value: string) => void;
-    onRefresh: () => void;
-    onClear: () => void;
-}) {
-    return (
-        <div className="page-stack">
-            <div className="page-header refined">
-                <div>
-                    <p className="page-kicker">Observability</p>
-                    <h2>Logs</h2>
-                    <p>Inspect engine, scheduler, and notification activity without leaving the app.</p>
-                </div>
-                <div className="page-actions">
-                    <button className="btn btn-ghost" onClick={onRefresh}>Refresh</button>
-                    <button className="btn btn-danger" onClick={onClear}>Clear logs</button>
-                </div>
-            </div>
-
-            <div className="filter-tabs wide">
-                {['all', 'INFO', 'WARN', 'ERROR', 'DEBUG'].map((level) => (
-                    <button
-                        key={level}
-                        className={`filter-tab ${logFilter === level ? 'active' : ''}`}
-                        onClick={() => setLogFilter(level)}
-                    >
-                        {level}
-                    </button>
-                ))}
-            </div>
-
-            {logs.length === 0 ? (
-                <div className="empty-state refined">
-                    <div className="empty-icon">Logs</div>
-                    <h3>No log entries yet</h3>
-                    <p>Run the engine or test a connection to populate the activity stream.</p>
-                </div>
-            ) : (
-                <div className="log-entries refined">
-                    {logs.map((log) => (
-                        <div key={log.id} className="log-entry">
-                            <span className={`log-level ${log.level}`}>{log.level}</span>
-                            <span className="log-time">{new Date(log.timestamp).toLocaleString()}</span>
-                            <span className="log-source">[{log.source}]</span>
-                            <span className="log-message">{log.message}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
         </div>
     );
 }

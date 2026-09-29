@@ -782,6 +782,7 @@ textarea {
 .workspace-item-overview {
   display: -webkit-box;
   -webkit-box-orient: vertical;
+  line-clamp: 3;
   -webkit-line-clamp: 3;
   overflow: hidden;
 }
@@ -1735,6 +1736,10 @@ textarea {
 .engine-stage-state { flex: 0 0 auto; color: var(--muted); }
 .engine-stage-messages { display: grid; gap: .35rem; margin: .5rem 0 0; padding: 0; list-style: none; text-transform: none; }
 .engine-stage-messages li { border-left: 2px solid var(--border); padding: .25rem .6rem; color: var(--muted); overflow-wrap: anywhere; }
+.dashboard-health-block { display: grid; gap: .7rem; }
+.dashboard-health-block .section-heading { margin-bottom: 0; }
+.link-button { appearance: none; border: 0; padding: 0; background: none; color: var(--accent); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.engine-run-history details:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .engine-run-history { display: grid; gap: .6rem; }
 .engine-run-history details { border: 1px solid var(--border); border-radius: .8rem; padding: .75rem; }
 .engine-run-history summary { cursor: pointer; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .75rem; }
@@ -2230,6 +2235,7 @@ textarea {
   }
 
   .queue-workspace-shell .workspace-item-overview {
+    line-clamp: 2;
     -webkit-line-clamp: 2;
   }
 }

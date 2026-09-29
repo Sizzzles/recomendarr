@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clearActiveRunAfterStatusFailure, formatElapsed, getPollingIntervals, primaryRunIssueStage, prominentRunIssue, prominentRunIssueHeading } from '../src/components/app/engine-observability-model';
+import { clearActiveRunAfterStatusFailure, currentServiceHealthIssue, formatElapsed, getPollingIntervals, primaryRunIssueStage, prominentRunIssue, prominentRunIssueHeading } from '../src/components/app/engine-observability-model';
 
 describe('engine observability model', () => {
     it('uses visible and hidden polling policies without fake progress', () => {
@@ -15,8 +15,8 @@ describe('engine observability model', () => {
 
     it('shows only a failure or partial newer than the latest success', () => {
         const failed = { id: 'bad', status: 'failed', startedAt: '2026-09-29T02:00:00Z' } as never;
-        const success = { id: 'good', status: 'succeeded', startedAt: '2026-09-29T01:00:00Z' } as never;
-        expect(prominentRunIssue(failed, success)?.id).toBe('bad');
+        const success = { id: 'good', status: 'succeeded', startedAt: '2026-09-29T01:00:00Z' };
+        expect(prominentRunIssue(failed, success as never)?.id).toBe('bad');
         expect(prominentRunIssue(failed, { ...success, startedAt: '2026-09-29T03:00:00Z' } as never)).toBeNull();
     });
 
@@ -46,5 +46,18 @@ describe('engine observability model', () => {
             ],
         } as never;
         expect(primaryRunIssueStage(run)?.name).toBe('syncing_watch_history');
+    });
+
+    it('derives live alerts only from current applicable service health', () => {
+        const healthy = (service: string) => ({ service, state: 'healthy', reason: 'Last query succeeded' });
+        expect(currentServiceHealthIssue(['media_server', 'tmdb', 'ai', 'sonarr', 'radarr'].map(healthy) as never)).toBeNull();
+        expect(currentServiceHealthIssue([
+            healthy('media_server'), { service: 'ai', state: 'disabled', reason: 'AI is disabled' },
+            { service: 'sonarr', state: 'not_configured', reason: 'Not configured' },
+        ] as never)).toBeNull();
+        expect(currentServiceHealthIssue([{ service: 'ai', state: 'failed', reason: 'Model unavailable' }] as never))
+            .toMatchObject({ service: 'ai', severity: 'failed', message: 'Model unavailable' });
+        expect(currentServiceHealthIssue([{ service: 'tmdb', state: 'stale', reason: 'Last successful check 3 days ago' }] as never))
+            .toMatchObject({ severity: 'soft' });
     });
 });

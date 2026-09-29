@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Recommendation } from '@/lib/types';
 import type { DashboardSummary, EngineFilterState, EngineObservabilityState } from './models';
@@ -7,8 +8,7 @@ import { HealthBadge } from './health-badge';
 import { buildFeedbackImpactSummary, formatDateTime, formatRelativeDate } from './utils';
 import { ServiceHealthStrip } from './service-health-strip';
 import { EngineRunStatus } from './engine-run-status';
-import { EngineRunHistory } from './engine-run-history';
-import { formatElapsed, primaryRunIssueStage, prominentRunIssue, prominentRunIssueHeading } from './engine-observability-model';
+import { currentServiceHealthIssue, formatElapsed } from './engine-observability-model';
 
 const GENRES = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western'];
 const PROVIDERS = [
@@ -29,6 +29,10 @@ interface DashboardPageProps {
     engineFilters: EngineFilterState;
     setEngineFilters: Dispatch<SetStateAction<EngineFilterState>>;
     observability: EngineObservabilityState;
+    checkingHealth: boolean;
+    healthCheckMessage: string | null;
+    onCheckHealth: () => void;
+    onViewRunDetails: (runId: string) => void;
 }
 
 export function DashboardPage({
@@ -40,9 +44,14 @@ export function DashboardPage({
     engineFilters,
     setEngineFilters,
     observability,
+    checkingHealth,
+    healthCheckMessage,
+    onCheckHealth,
+    onViewRunDetails,
 }: DashboardPageProps) {
-    const prominentIssue = prominentRunIssue(observability.latestRun, observability.lastSuccessfulRun);
-    const failedStage = prominentIssue ? primaryRunIssueStage(prominentIssue) : undefined;
+    const healthIssue = currentServiceHealthIssue(observability.services);
+    const detailRun = observability.latestRun && ['failed', 'partial', 'interrupted'].includes(observability.latestRun.status)
+        ? observability.latestRun : null;
     const toggleGenre = (genre: string) => {
         setEngineFilters((prev) => ({
             ...prev,
@@ -86,17 +95,23 @@ export function DashboardPage({
                 </div>
             </div>
 
-            <ServiceHealthStrip services={observability.services} rich />
+            <section className="dashboard-health-block">
+                <div className="section-heading"><div><p className="section-kicker">Current health</p><h3>Core services</h3></div>
+                    <button className="btn btn-ghost" onClick={onCheckHealth} disabled={checkingHealth}>
+                        {checkingHealth && <span className="spinner" />}{checkingHealth ? 'Checking...' : 'Run health check'}
+                    </button>
+                </div>
+                <ServiceHealthStrip services={observability.services} rich />
+                {healthCheckMessage && <p className="inline-result" role="status">{healthCheckMessage}</p>}
+            </section>
             {observability.activeRun && <EngineRunStatus run={observability.activeRun} />}
-            {prominentIssue && <section className={`engine-run-alert ${prominentIssue.status}`} role="alert">
-                <div><strong>{prominentRunIssueHeading(prominentIssue.status)}</strong>
-                    <p>{failedStage ? `${failedStage.name.replaceAll('_', ' ')}: ` : ''}{prominentIssue.errorMessage || 'One or more attempted operations did not complete.'}</p>
-                    <a href={`#run-${prominentIssue.id}`}>View run details</a></div>
-                <p className="run-id">Run ID: <code>{prominentIssue.id}</code> · {formatDateTime(prominentIssue.startedAt)}</p>
+            {healthIssue && <section className={`engine-run-alert ${healthIssue.severity}`} role="alert">
+                <div><strong>{healthIssue.severity === 'failed' ? 'Service health problem' : healthIssue.severity === 'degraded' ? 'Service health degraded' : 'Service health needs attention'}</strong>
+                    <p>{healthIssue.service.replaceAll('_', ' ')}: {healthIssue.message}</p>
+                    {detailRun && <button className="link-button" onClick={() => onViewRunDetails(detailRun.id)}>View run details</button>}</div>
             </section>}
 
-            <div className="stats-grid upgraded">
-                <article className="stat-card warm">
+            <div className="stats-grid upgraded">                <article className="stat-card warm">
                     <span className="stat-label">Next scheduled run</span>
                     <strong className="stat-value small">{summary.automation.nextRun ? formatDateTime(summary.automation.nextRun) : 'Manual only'}</strong>
                     <span className="stat-meta">{summary.automation.nextRun ? formatRelativeDate(summary.automation.nextRun) : 'Scheduler disabled'}</span>
@@ -333,7 +348,7 @@ export function DashboardPage({
                             {pendingRecs.length > 0 ? (
                                 pendingRecs.map((rec) => (
                                     <div key={rec.id} className="mini-queue-item">
-                                        {rec.posterUrl ? <img src={rec.posterUrl} alt={rec.title} /> : <div className="mini-queue-poster">No poster</div>}
+                                        {rec.posterUrl ? <Image src={rec.posterUrl} alt={rec.title} width={56} height={84} unoptimized /> : <div className="mini-queue-poster">No poster</div>}
                                         <div>
                                             <strong>{rec.title}</strong>
                                             <p>{[rec.year, rec.source.toUpperCase()].filter(Boolean).join(' · ')}</p>
@@ -347,7 +362,6 @@ export function DashboardPage({
                     </section>
                 </div>
             </div>
-            <EngineRunHistory runs={observability.runs} />
         </div>
     );
 }
